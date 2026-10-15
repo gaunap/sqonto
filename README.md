@@ -27,7 +27,14 @@ vollständig auf dem eigenen Rechner (keine Cloud), die Daten liegen in einer SQ
 
 ## Schnellstart (Windows)
 
-Voraussetzungen: [Rust](https://rustup.rs) (stable) und [Node.js](https://nodejs.org) ab Version 22.
+Fertige Windows-Installer und portable Archive stehen nach einem Release unter **Releases**
+im GitHub-Repository bereit. Der Installer installiert Sqonto für den aktuellen Benutzer
+(ohne Administratorrechte) und legt einen Eintrag im Startmenü sowie optional auf dem Desktop an.
+
+Zum eigenen Bauen: [Rust](https://rustup.rs) (stable, unter Windows x64 MSVC),
+[Node.js](https://nodejs.org) ab Version 22 und [Inno Setup 6](https://jrsoftware.org/isdl.php).
+`ISCC.exe` wird im PATH oder im Standardordner von Inno Setup gesucht; alternativ die
+Umgebungsvariable `ISCC` auf den vollständigen Pfad setzen.
 
 ```bat
 build.cmd
@@ -42,14 +49,31 @@ baut Frontend und Backend und legt die fertigen Programme unter `dist\` ab:
   ungespeicherten Änderungen fragt Sqonto nach.
 - **`sqonto-server.exe`** – derselbe Server ohne Fenster, z. B. für die Nutzung im Browser
   (<http://localhost:8787>) oder für die Entwicklung.
+- **`packages\Sqonto-<Version>-windows-x64-setup.exe`** – Windows-Installer mit beiden
+  Programmen und Lizenztexten. `build.cmd --no-installer` baut nur die portablen Programme.
+  Nach einem bereits fertigen Build kann mit
+  `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-installer.ps1`
+  nur der Installer neu erstellt werden.
 
 Die Daten liegen im Ordner `dist\data` neben den Programmen (beide nutzen dieselben Daten). Zum
 Umziehen oder Sichern genügt es, diesen Ordner zu kopieren – oder unter
 *Einstellungen → Daten & Sicherung* eine Sicherung herunterzuladen.
 
-Die Desktop-Anwendung nutzt die „Microsoft Edge WebView2 Runtime“, die unter Windows 10 und 11
-vorinstalliert ist. Unter Linux/macOS entsprechend `./build.sh`; Linux benötigt dafür
-`webkit2gtk-4.1`, mit `SQONTO_SERVER_ONLY=1 ./build.sh` wird nur der Server gebaut.
+Bei Installation ist der Standardpfad `%LOCALAPPDATA%\Programs\Sqonto`, die Daten liegen
+entsprechend in `%LOCALAPPDATA%\Programs\Sqonto\data`. Updates über denselben Installer
+ersetzen nur die Programmdateien. Auch eine Deinstallation lässt die Daten bestehen.
+Beim Wechsel von einer portablen Version Sqonto schließen und den bisherigen `data`-Ordner
+in den Installationsordner kopieren, bevor die installierte Anwendung gestartet wird.
+
+Die Desktop-Anwendung benötigt die „Microsoft Edge WebView2 Runtime“, die auf vielen
+Windows-Systemen bereits vorhanden ist. Falls sie fehlt, die
+[Evergreen Runtime von Microsoft](https://developer.microsoft.com/microsoft-edge/webview2/)
+installieren; sie ist nicht im Sqonto-Installer enthalten. Unter Linux/macOS entsprechend
+`sh build.sh`; Linux benötigt dafür `webkit2gtk-4.1` und GTK 3 (zum Bauen die jeweiligen
+Entwicklungspakete). Mit `SQONTO_SERVER_ONLY=1 sh build.sh` wird nur der Server gebaut.
+Das Skript erzeugt zusätzlich ein portables `.tar.gz` unter `dist/packages/`. Linux-Archive
+benötigen auch auf dem Zielsystem WebKitGTK 4.1/GTK 3; macOS-Archive enthalten native Programme,
+kein `.app`-Bundle. Die Pakete sind derzeit weder signiert noch unter macOS notarisiert.
 
 Beim ersten Start führt ein Assistent durch die Einrichtung. Mit *„Erst einmal ausprobieren“*
 wird ein vollständiges Demo-Geschäftsjahr geladen.
@@ -93,6 +117,32 @@ cd frontend && npm run types
 ```
 
 Tests: `cd backend && cargo test`, Typprüfung: `cd frontend && npm run typecheck`.
+
+### GitHub Actions und Releases
+
+`.github/workflows/build.yml` läuft bei Pushes, Pull Requests und manuell. Auf Windows x64,
+Linux x64 (Ubuntu 24.04) und macOS ARM64 werden Frontend-Typprüfung und Frontend-Build,
+Rust-Tests aller Targets, ein Server-Build ohne Desktop-Features und der Release-Build
+ausgeführt. Unter Windows prüft ein zusätzlicher Test Installation, Start des installierten
+Servers mit eingebettetem Frontend, Update und Datenerhalt bei Deinstallation. Die fertigen
+Pakete können bei jedem erfolgreichen Lauf als Workflow-Artefakte heruntergeladen werden.
+
+Für einen Release:
+
+1. Dieselbe Version `X.Y.Z` in `backend/Cargo.toml` und `frontend/package.json` setzen,
+   die Lockdateien aktualisieren und die Änderungen committen.
+2. Den Tag `vX.Y.Z` erstellen und zu GitHub pushen, z. B. `git tag v0.1.0` und
+   `git push origin v0.1.0`.
+3. Nach erfolgreichen Builds aller Plattformen veröffentlicht die Pipeline automatisch
+   einen GitHub Release mit Windows-Installer, Windows-ZIP, Linux/macOS-Archiven,
+   SHA-256-Prüfsummen und automatisch erzeugten Release Notes. Der Tag muss exakt zur
+   Paketversion passen. Zum Wiederholen eines fehlgeschlagenen Releases den Workflow des
+   Tags erneut ausführen; ein manueller Branch-Lauf veröffentlicht keinen Release.
+
+Der Workflow benötigt keine eigenen Secrets: nur der Release-Job erhält Schreibrechte
+über den eingebauten `GITHUB_TOKEN`. GitHub Actions muss im Repository aktiviert sein.
+Die Paketlisten enthalten ausschließlich Programme und Lizenztexte; lokale `data`-Ordner
+werden nicht verpackt.
 
 ### Aufbau
 

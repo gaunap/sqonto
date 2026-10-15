@@ -1,0 +1,128 @@
+name: Test, build and release
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # Typst is a large dependency; keep compilation within hosted runner memory.
+  CARGO_BUILD_JOBS: 2
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            platform: windows-x64
+          - os: ubuntu-24.04
+            platform: linux-x64
+          - os: macos-15
+            platform: macos-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install Rust stable
+        run: rustup update stable --no-self-update
+      - name: Select Rust stable
+        run: rustup default stable
+      - name: Validate version and release tag
+        run: node scripts/version.mjs
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - name: Install Inno Setup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (!(Test-Path "${env:ProgramFiles(x86)}/Inno Setup 6/ISCC.exe")) {
+            choco install innosetup --version=6.7.3 --no-progress -y
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Install frontend dependencies
+        run: npm --prefix frontend ci --no-audit --no-fund
+      - name: Check frontend types
+        run: npm --prefix frontend run typecheck
+      - name: Build frontend for embedded assets
+        run: npm --prefix frontend run build
+      - name: Test Rust library and binaries
+        run: cargo test --locked --manifest-path backend/Cargo.toml --all-targets
+      - name: Check server-only build
+        run: cargo check --locked --manifest-path backend/Cargo.toml --no-default-features --bin sqonto-server
+      - name: Build Windows binaries and installer
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: build.cmd
+      - name: Test Windows installer lifecycle
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test-installer.ps1
+      - name: Package Windows portable binaries
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = node scripts/version.mjs
+          Compress-Archive -Path dist/Sqonto.exe, dist/sqonto-server.exe, dist/LICENSE.txt, dist/THIRD-PARTY-LICENSES.txt -DestinationPath "dist/packages/Sqonto-$version-windows-x64-portable.zip"
+      - name: Build and package Unix binaries
+        if: runner.os != 'Windows'
+        run: sh build.sh
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.platform }}
+          path: dist/packages/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: packages-*
+          merge-multiple: true
+          path: packages
+      - name: Create checksums and publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd packages
+          sha256sum -- * > SHA256SUMS.txt
+          # A failed upload leaves a draft; publish only after all assets are present.
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "Sqonto $RELEASE_TAG" --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" --clobber -- *
+          gh release edit "$RELEASE_TAG" --draft=false

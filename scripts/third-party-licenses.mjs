@@ -26,7 +26,7 @@ function licenseTexts(dir) {
 function rustPackages() {
   const host = execFileSync('rustc', ['-vV'], { encoding: 'utf8' }).match(/^host: (.+)$/m)[1];
   const meta = JSON.parse(
-    execFileSync('cargo', ['metadata', '--format-version', '1', '--filter-platform', host], {
+    execFileSync('cargo', ['metadata', '--locked', '--format-version', '1', '--filter-platform', host], {
       cwd: path.join(root, 'backend'),
       encoding: 'utf8',
       maxBuffer: 1 << 28,
