@@ -122,8 +122,14 @@ Tests: `cd backend && cargo test`, Typprüfung: `cd frontend && npm run typechec
 
 `.github/workflows/build.yml` läuft bei Pushes, Pull Requests und manuell. Auf Windows x64,
 Linux x64 (Ubuntu 24.04) und macOS ARM64 werden Frontend-Typprüfung und Frontend-Build,
-Rust-Tests aller Targets, ein Server-Build ohne Desktop-Features und der Release-Build
-ausgeführt. Unter Windows prüft ein zusätzlicher Test Installation, Start des installierten
+Rust-Tests aller Targets und der Release-Build ausgeführt. Tests laufen mit `--release`,
+damit sie ihre kompilierten Abhängigkeiten mit dem anschließenden Paket-Build teilen.
+Ein Rust-Cache pro Plattform hält Abhängigkeiten und kompilierte Artefakte zwischen Läufen
+vor; Änderungen am Compiler oder den Abhängigkeiten werden bei der Cache-Auswahl berücksichtigt.
+Die Build-Skripte verwenden in CI mit `SQONTO_FRONTEND_READY=1` das bereits gebaute Frontend
+(lokale Builds bauen es weiterhin selbst). Unter Linux werden nach dem Paket-Build zusätzlich
+die Bibliothek und der Server ohne Desktop-Features im Release-Profil getestet.
+Unter Windows prüft ein zusätzlicher Test Installation, Start des installierten
 Servers mit eingebettetem Frontend, Update und Datenerhalt bei Deinstallation. Die fertigen
 Pakete können bei jedem erfolgreichen Lauf als Workflow-Artefakte heruntergeladen werden.
 

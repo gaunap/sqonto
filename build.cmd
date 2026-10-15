@@ -10,11 +10,18 @@ if not "%~1"=="" if not "%~1"=="--no-installer" (
 )
 node scripts\version.mjs || goto :error
 
-echo [1/3] Frontend-Abhaengigkeiten ...
-call npm --prefix frontend ci --no-audit --no-fund || goto :error
-
-echo [2/3] Frontend bauen ...
-call npm --prefix frontend run build || goto :error
+if "%SQONTO_FRONTEND_READY%"=="1" (
+  if not exist frontend\dist\index.html (
+    echo SQONTO_FRONTEND_READY requires an already built frontend/dist/index.html.
+    goto :error
+  )
+  echo [1-2/3] Vorbereitetes Frontend verwenden ...
+) else (
+  echo [1/3] Frontend-Abhaengigkeiten ...
+  call npm --prefix frontend ci --no-audit --no-fund || goto :error
+  echo [2/3] Frontend bauen ...
+  call npm --prefix frontend run build || goto :error
+)
 
 echo [3/3] Backend bauen (Release) ...
 cargo build --locked --release --manifest-path backend\Cargo.toml --bins || goto :error

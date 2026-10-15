@@ -18,8 +18,6 @@ env:
   CARGO_TERM_COLOR: always
   # Typst is a large dependency; keep compilation within hosted runner memory.
   CARGO_BUILD_JOBS: 2
-  CARGO_PROFILE_DEV_DEBUG: 0
-  CARGO_PROFILE_TEST_DEBUG: 0
 
 jobs:
   build:
@@ -48,6 +46,11 @@ jobs:
         run: rustup update stable --no-self-update
       - name: Select Rust stable
         run: rustup default stable
+      - name: Cache Rust dependencies and compiled artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend -> target
+          key: ${{ matrix.platform }}-release
       - name: Validate version and release tag
         run: node scripts/version.mjs
       - name: Install Linux desktop dependencies
@@ -65,17 +68,18 @@ jobs:
           }
       - name: Install frontend dependencies
         run: npm --prefix frontend ci --no-audit --no-fund
-      - name: Check frontend types
-        run: npm --prefix frontend run typecheck
       - name: Build frontend for embedded assets
+        # npm run build already runs the TypeScript checker.
         run: npm --prefix frontend run build
       - name: Test Rust library and binaries
-        run: cargo test --locked --manifest-path backend/Cargo.toml --all-targets
-      - name: Check server-only build
-        run: cargo check --locked --manifest-path backend/Cargo.toml --no-default-features --bin sqonto-server
+        # Match the packaging profile so dependencies (especially Typst) are reused.
+        # Test harnesses still need their own compilation/linking.
+        run: cargo test --locked --release --manifest-path backend/Cargo.toml --all-targets
       - name: Build Windows binaries and installer
         if: runner.os == 'Windows'
         shell: cmd
+        env:
+          SQONTO_FRONTEND_READY: '1'
         run: build.cmd
       - name: Test Windows installer lifecycle
         if: runner.os == 'Windows'
@@ -89,7 +93,14 @@ jobs:
           Compress-Archive -Path dist/Sqonto.exe, dist/sqonto-server.exe, dist/LICENSE.txt, dist/THIRD-PARTY-LICENSES.txt -DestinationPath "dist/packages/Sqonto-$version-windows-x64-portable.zip"
       - name: Build and package Unix binaries
         if: runner.os != 'Windows'
+        env:
+          SQONTO_FRONTEND_READY: '1'
         run: sh build.sh
+      - name: Test server-only configuration
+        # Feature changes require some distinct artifacts. Check this once, after
+        # packaging, so it cannot replace the binaries being shipped.
+        if: runner.os == 'Linux'
+        run: cargo test --locked --release --manifest-path backend/Cargo.toml --no-default-features --lib --bin sqonto-server
       - name: Upload packages
         uses: actions/upload-artifact@v4
         with:

@@ -9,11 +9,18 @@ set -e
 cd "$(dirname "$0")"
 version=$(node scripts/version.mjs)
 
-echo "[1/3] Frontend-Abhängigkeiten …"
-npm --prefix frontend ci --no-audit --no-fund
-
-echo "[2/3] Frontend bauen …"
-npm --prefix frontend run build
+if [ "${SQONTO_FRONTEND_READY:-}" = "1" ]; then
+  if [ ! -f frontend/dist/index.html ]; then
+    echo "SQONTO_FRONTEND_READY requires an already built frontend/dist/index.html." >&2
+    exit 1
+  fi
+  echo "[1-2/3] Vorbereitetes Frontend verwenden …"
+else
+  echo "[1/3] Frontend-Abhängigkeiten …"
+  npm --prefix frontend ci --no-audit --no-fund
+  echo "[2/3] Frontend bauen …"
+  npm --prefix frontend run build
+fi
 
 echo "[3/3] Backend bauen (Release) …"
 mkdir -p dist
