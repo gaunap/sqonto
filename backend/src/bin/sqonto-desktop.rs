@@ -1,0 +1,366 @@
+//! `sqonto-desktop` – Sqonto as a desktop application: runs the server inside the process and
+//! shows the interface in a native window (WebView2 on Windows, WebKit on macOS/Linux) – without
+//! console window and without browser.
+//!
+//! Development: `SQONTO_DESKTOP_URL=http://localhost:5173` shows the Vite dev server (hot reload)
+//! instead of the embedded frontend; `SQONTO_DEVTOOLS=1` enables the developer tools.
+
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::sync::Mutex;
+
+use sqonto::Launch;
+use serde::{Deserialize, Serialize};
+use tao::dpi::{LogicalSize, PhysicalPosition};
+use tao::event::{Event, WindowEvent};
+use tao::event_loop::{ControlFlow, EventLoop, EventLoopBuilder, EventLoopWindowTarget};
+use tao::window::{Icon, Window, WindowBuilder, WindowId};
+use wry::{NewWindowResponse, WebContext, WebView, WebViewBuilder};
+
+const WEBVIEW2_DOWNLOAD: &str = "https://go.microsoft.com/fwlink/p/?LinkId=2124703";
+/// Asks the page how many editors have unsaved changes (see `useLeaveWarning` in the frontend).
+const UNSAVED_JS: &str = "(window.__sqontoUnsaved ? window.__sqontoUnsaved() : 0)";
+
+#[derive(Debug)]
+enum UserEvent {
+    /// Another start of the program wants this window in front.
+    Focus,
+    /// `window.open` – app pages (PDF preview) get an own window, external pages the browser.
+    OpenWindow(String),
+    /// Answer of the page to `UNSAVED_JS` when the window is closed.
+    CloseCheck(String),
+    Downloaded(PathBuf),
+}
+
+#[derive(Serialize, Deserialize)]
+struct WindowState {
+    width: f64,
+    height: f64,
+    x: i32,
+    y: i32,
+    maximized: bool,
+}
+
+fn main() {
+    let dir = sqonto::data_dir();
+    init_logging(&dir);
+    let runtime = tokio::runtime::Runtime::new().unwrap_or_else(|e| fatal(&format!("Sqonto konnte nicht gestartet werden:\n\n{e}")));
+    let app_url = match runtime.block_on(sqonto::launch(sqonto::default_port(), &dir)) {
+        Ok(Launch::Started(server)) => {
+            let url = server.url.clone();
+            runtime.spawn(async move {
+                if let Err(e) = server.run().await {
+                    tracing::error!("Server beendet: {e:#}");
+                }
+            });
+            url
+        }
+        Ok(Launch::AlreadyRunning { port, url }) => {
+            if sqonto::request_focus(port) {
+                return;
+            }
+            // A headless server with the same data is running – show it in a window.
+            url
+        }
+        Err(e) => fatal(&format!("Sqonto konnte nicht gestartet werden:\n\n{e:#}")),
+    };
+    let start_url = std::env::var("SQONTO_DESKTOP_URL").unwrap_or_else(|_| app_url.clone());
+    run(&dir, app_url, start_url);
+}
+
+fn run(dir: &Path, app_url: String, start_url: String) -> ! {
+    let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+    let proxy = event_loop.create_proxy();
+    let focus_proxy = Mutex::new(proxy.clone());
+    sqonto::set_focus_handler(move || {
+        if let Ok(p) = focus_proxy.lock() {
+            let _ = p.send_event(UserEvent::Focus);
+        }
+    });
+
+    let state_file = dir.join("window.json");
+    let window = main_window(&event_loop, &state_file).unwrap_or_else(|e| fatal(&format!("Das Fenster konnte nicht erstellt werden:\n\n{e}")));
+    // Own profile folder in the data directory (WebView2 would otherwise create one next to the exe).
+    let mut web_context = WebContext::new(Some(dir.join("webview")));
+    let downloads: Rc<RefCell<HashSet<PathBuf>>> = Rc::default();
+    let last_dir: Rc<RefCell<Option<PathBuf>>> = Rc::default();
+    let allowed = vec![origin(&app_url), origin(&start_url), "http://127.0.0.1:".to_string() + port_of(&app_url)];
+    let webview = {
+        let proxy_nw = proxy.clone();
+        let proxy_dl = proxy.clone();
+        let allowed_nav = allowed.clone();
+        let downloads_ipc = downloads.clone();
+        let builder = WebViewBuilder::new_with_web_context(&mut web_context)
+            .with_url(&start_url)
+            .with_devtools(devtools())
+            .with_initialization_script("window.__SQONTO_DESKTOP__ = true;")
+            .with_navigation_handler(move |url| keep_inside(&url, &allowed_nav))
+            .with_new_window_req_handler(move |url, _| {
+                let _ = proxy_nw.send_event(UserEvent::OpenWindow(url));
+                NewWindowResponse::Deny
+            })
+            .with_download_started_handler(save_dialog(last_dir.clone()))
+            .with_download_completed_handler(move |_, path, ok| {
+                if ok && let Some(path) = path {
+                    let _ = proxy_dl.send_event(UserEvent::Downloaded(path));
+                }
+            })
+            .with_ipc_handler(move |req| handle_ipc(req.body(), &downloads_ipc.borrow()));
+        builder.build(&window).unwrap_or_else(|e| webview_missing(&e))
+    };
+
+    let mut popups: HashMap<WindowId, (Window, WebView)> = HashMap::new();
+    event_loop.run(move |event, target, control_flow| {
+        *control_flow = ControlFlow::Wait;
+        match event {
+            Event::WindowEvent { window_id, event: WindowEvent::CloseRequested, .. } => {
+                if window_id != window.id() {
+                    popups.remove(&window_id);
+                    return;
+                }
+                let p = proxy.clone();
+                if webview.evaluate_script_with_callback(UNSAVED_JS, move |r| {
+                    let _ = p.send_event(UserEvent::CloseCheck(r));
+                })
+                .is_err()
+                {
+                    save_state(&window, &state_file);
+                    *control_flow = ControlFlow::Exit;
+                }
+            }
+            Event::UserEvent(UserEvent::CloseCheck(answer)) => {
+                let unsaved = answer.trim_matches('"').parse::<f64>().unwrap_or(0.0) > 0.0;
+                if !unsaved
+                    || ask(
+                        &window,
+                        "Ungespeicherte Änderungen",
+                        "Es gibt Änderungen, die noch nicht gespeichert wurden. Sqonto trotzdem beenden?",
+                    )
+                {
+                    save_state(&window, &state_file);
+                    *control_flow = ControlFlow::Exit;
+                }
+            }
+            Event::UserEvent(UserEvent::Focus) => {
+                window.set_visible(true);
+                window.set_minimized(false);
+                window.set_focus();
+            }
+            Event::UserEvent(UserEvent::OpenWindow(url)) => {
+                if allowed.iter().any(|o| url.starts_with(o.as_str())) {
+                    match popup(target, &mut web_context, &url, &allowed, last_dir.clone()) {
+                        Ok(p) => {
+                            popups.insert(p.0.id(), p);
+                        }
+                        Err(e) => tracing::error!("Fenster für {url} nicht geöffnet: {e}"),
+                    }
+                } else {
+                    let _ = open::that(&url);
+                }
+            }
+            Event::UserEvent(UserEvent::Downloaded(path)) => {
+                downloads.borrow_mut().insert(path.clone());
+                let arg = serde_json::to_string(&path.display().to_string()).unwrap_or_default();
+                let _ = webview.evaluate_script(&format!("window.__sqontoDownloaded && window.__sqontoDownloaded({arg})"));
+            }
+            _ => {}
+        }
+    })
+}
+
+fn main_window(event_loop: &EventLoop<UserEvent>, state_file: &Path) -> Result<Window, tao::error::OsError> {
+    let saved: Option<WindowState> = std::fs::read(state_file).ok().and_then(|b| serde_json::from_slice(&b).ok());
+    let mut builder = WindowBuilder::new().with_title("Sqonto").with_min_inner_size(LogicalSize::new(900.0, 600.0)).with_window_icon(app_icon());
+    match saved {
+        Some(s) => {
+            builder = builder.with_inner_size(LogicalSize::new(s.width.max(900.0), s.height.max(600.0))).with_maximized(s.maximized);
+            // Only restore the position if it is still on one of the screens.
+            let visible = event_loop.available_monitors().any(|m| {
+                let (p, size) = (m.position(), m.size());
+                s.x + 80 >= p.x && s.y >= p.y && s.x + 80 <= p.x + size.width as i32 && s.y + 40 <= p.y + size.height as i32
+            });
+            if visible {
+                builder = builder.with_position(PhysicalPosition::new(s.x, s.y));
+            }
+        }
+        None => builder = builder.with_inner_size(LogicalSize::new(1440.0, 920.0)),
+    }
+    builder.build(event_loop)
+}
+
+/// Window for app pages opened via `window.open`, e.g. a PDF for printing.
+fn popup(
+    target: &EventLoopWindowTarget<UserEvent>,
+    web_context: &mut WebContext,
+    url: &str,
+    allowed: &[String],
+    last_dir: Rc<RefCell<Option<PathBuf>>>,
+) -> Result<(Window, WebView), Box<dyn std::error::Error>> {
+    let window = WindowBuilder::new()
+        .with_title(if url.contains("/pdf") { "Sqonto – PDF" } else { "Sqonto" })
+        .with_inner_size(LogicalSize::new(980.0, 1100.0))
+        .with_window_icon(app_icon())
+        .build(target)?;
+    let allowed = allowed.to_vec();
+    let webview = WebViewBuilder::new_with_web_context(web_context)
+        .with_url(url)
+        .with_devtools(devtools())
+        .with_navigation_handler(move |u| keep_inside(&u, &allowed))
+        .with_new_window_req_handler(|u, _| {
+            let _ = open::that(&u);
+            NewWindowResponse::Deny
+        })
+        .with_download_started_handler(save_dialog(last_dir))
+        .build(&window)?;
+    Ok((window, webview))
+}
+
+/// Navigation inside the app stays in the window; everything else (mailto:, websites) is handed
+/// to the default application.
+fn keep_inside(url: &str, allowed: &[String]) -> bool {
+    if ["about:", "blob:", "data:"].iter().any(|p| url.starts_with(p)) || allowed.iter().any(|o| url.starts_with(o.as_str())) {
+        return true;
+    }
+    if let Err(e) = open::that(url) {
+        tracing::warn!("{url} konnte nicht geöffnet werden: {e}");
+    }
+    false
+}
+
+/// Downloads ask for the target with the native "Speichern unter" dialog.
+fn save_dialog(last_dir: Rc<RefCell<Option<PathBuf>>>) -> impl FnMut(String, &mut PathBuf) -> bool + 'static {
+    move |_url, path| {
+        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "Download".into());
+        let mut dialog = rfd::FileDialog::new().set_title("Speichern unter").set_file_name(&name);
+        if let Some(dir) = last_dir.borrow().clone().or_else(|| path.parent().map(Path::to_path_buf)) {
+            dialog = dialog.set_directory(dir);
+        }
+        if let Some(ext) = Path::new(&name).extension().and_then(|e| e.to_str()) {
+            dialog = dialog.add_filter(ext.to_uppercase(), &[ext]);
+        }
+        match dialog.save_file() {
+            Some(target) => {
+                *last_dir.borrow_mut() = target.parent().map(Path::to_path_buf);
+                *path = target;
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// Messages from the page (`window.ipc.postMessage`). Only files saved in this session may be
+/// opened or shown.
+fn handle_ipc(message: &str, downloads: &HashSet<PathBuf>) {
+    let Some((command, path)) = message.split_once(':') else { return };
+    let path = PathBuf::from(path);
+    if !downloads.contains(&path) {
+        return;
+    }
+    match command {
+        "open" => {
+            let _ = open::that(&path);
+        }
+        "reveal" => reveal(&path),
+        _ => {}
+    }
+}
+
+fn reveal(path: &Path) {
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("explorer").arg(format!("/select,{}", path.display())).spawn();
+    }
+    #[cfg(not(windows))]
+    if let Some(dir) = path.parent() {
+        let _ = open::that(dir);
+    }
+}
+
+fn save_state(window: &Window, file: &Path) {
+    let maximized = window.is_maximized();
+    let scale = window.scale_factor();
+    let size = window.inner_size().to_logical::<f64>(scale);
+    let pos = window.outer_position().unwrap_or_default();
+    let mut state = WindowState { width: size.width, height: size.height, x: pos.x, y: pos.y, maximized };
+    // Keep the normal size and position of a maximised window from the last start.
+    if maximized && let Some(prev) = std::fs::read(file).ok().and_then(|b| serde_json::from_slice::<WindowState>(&b).ok()) {
+        state = WindowState { maximized: true, ..prev };
+    }
+    if let Ok(json) = serde_json::to_vec_pretty(&state) {
+        let _ = std::fs::write(file, json);
+    }
+}
+
+fn origin(url: &str) -> String {
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let host = rest.split('/').next().unwrap_or(rest);
+    let scheme = url.split_once("://").map(|(s, _)| s).unwrap_or("http");
+    format!("{scheme}://{host}")
+}
+
+fn port_of(url: &str) -> &str {
+    url.rsplit(':').next().unwrap_or("").trim_end_matches('/')
+}
+
+fn devtools() -> bool {
+    cfg!(debug_assertions) || std::env::var("SQONTO_DEVTOOLS").is_ok()
+}
+
+fn app_icon() -> Option<Icon> {
+    #[cfg(windows)]
+    {
+        use tao::platform::windows::IconExtWindows;
+        Icon::from_resource(1, None).ok()
+    }
+    #[cfg(not(windows))]
+    None
+}
+
+/// Log file in the data directory – there is no console.
+fn init_logging(dir: &Path) {
+    let _ = std::fs::create_dir_all(dir);
+    match std::fs::File::create(dir.join("sqonto.log")) {
+        Ok(file) => tracing_subscriber::fmt().with_target(false).with_ansi(false).with_writer(Mutex::new(file)).init(),
+        Err(_) => tracing_subscriber::fmt().with_target(false).init(),
+    }
+}
+
+fn ask(window: &Window, title: &str, text: &str) -> bool {
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title(title)
+        .set_description(text)
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .set_parent(window)
+        .show()
+        == rfd::MessageDialogResult::Yes
+}
+
+fn fatal(message: &str) -> ! {
+    tracing::error!("{message}");
+    rfd::MessageDialog::new().set_level(rfd::MessageLevel::Error).set_title("Sqonto").set_description(message).show();
+    std::process::exit(1)
+}
+
+fn webview_missing(e: &wry::Error) -> ! {
+    tracing::error!("WebView: {e}");
+    let install = rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Error)
+        .set_title("Sqonto")
+        .set_description(format!(
+            "Die Anzeige konnte nicht gestartet werden ({e}).\n\nSqonto benötigt die „Microsoft Edge WebView2 Runtime“, die unter Windows 10/11 normalerweise vorinstalliert ist. Jetzt herunterladen?"
+        ))
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .show()
+        == rfd::MessageDialogResult::Yes;
+    if install {
+        let _ = open::that(WEBVIEW2_DOWNLOAD);
+    }
+    std::process::exit(1)
+}
+

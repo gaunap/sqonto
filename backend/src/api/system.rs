@@ -1,0 +1,522 @@
+use std::io::{Read, Write};
+
+use axum::Json;
+use axum::extract::{Multipart, Path, Query, State};
+use axum::response::Response;
+use chrono::Datelike;
+use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
+use super::{Pages, file_response, render_svgs};
+use crate::db::{self, v};
+use crate::error::{ApiResult, AppError};
+use crate::models::*;
+use crate::pdf::{PdfEngine, data};
+use crate::services::{demo, finance, masterdata, posting, settings as cfg};
+use crate::state::AppState;
+use crate::util::{now_str, today, ymd};
+
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct SystemStatus {
+    pub onboarded: bool,
+    pub has_data: bool,
+    pub version: String,
+    pub data_dir: String,
+    pub chart: String,
+    pub bookkeeping: String,
+    pub small_business: bool,
+    pub company_name: String,
+    pub has_cash: bool,
+    pub default_cash_id: Option<i64>,
+    pub default_bank_id: Option<i64>,
+}
+
+/// Raises the desktop window (sent by a second start of the program).
+pub async fn focus() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "focused": crate::focus_window() }))
+}
+
+pub async fn status(State(st): State<AppState>) -> ApiResult<SystemStatus> {
+    st.read(|c| {
+        let s = cfg::load(c)?;
+        let has_data = db::scalar_i64(c, "SELECT (SELECT COUNT(*) FROM documents) + (SELECT COUNT(*) FROM receipts) + (SELECT COUNT(*) FROM transactions)", &[])? > 0;
+        let cash: Option<i64> = c.query_row("SELECT id FROM payment_accounts WHERE kind = 'cash' AND archived = 0 ORDER BY id LIMIT 1", [], |r| r.get(0)).ok();
+        let bank: Option<i64> = c.query_row("SELECT id FROM payment_accounts WHERE kind != 'cash' AND archived = 0 ORDER BY id LIMIT 1", [], |r| r.get(0)).ok();
+        Ok(SystemStatus {
+            onboarded: s.onboarded,
+            has_data,
+            version: env!("CARGO_PKG_VERSION").into(),
+            data_dir: st.data_dir.display().to_string(),
+            chart: s.tax.chart.clone(),
+            bookkeeping: s.tax.bookkeeping.clone(),
+            small_business: s.tax.small_business,
+            company_name: s.company.name.clone(),
+            has_cash: cash.is_some(),
+            default_cash_id: cash,
+            default_bank_id: bank,
+        })
+    })
+    .map(Json)
+}
+
+pub async fn get_settings(State(st): State<AppState>) -> ApiResult<Settings> {
+    st.read(cfg::load).map(Json)
+}
+
+/// Drops references to files or layouts that no longer exist (e.g. after a reset or restore).
+fn sanitize_refs(c: &rusqlite::Connection, s: &mut Settings) -> anyhow::Result<()> {
+    if let Some(id) = s.company.logo_file_id
+        && db::find::<FileMeta>(c, id)?.is_none()
+    {
+        s.company.logo_file_id = None;
+    }
+    if let Some(id) = s.docs.default_layout_id
+        && db::find::<Layout>(c, id)?.is_none()
+    {
+        s.docs.default_layout_id = None;
+    }
+    Ok(())
+}
+
+pub async fn put_settings(State(st): State<AppState>, Json(mut new): Json<Settings>) -> ApiResult<Settings> {
+    st.write(|c| {
+        let old = cfg::load(c)?;
+        if new.tax.chart != old.tax.chart {
+            cfg::change_chart(c, &new.tax.chart)?;
+        }
+        new.onboarded = old.onboarded || new.onboarded;
+        sanitize_refs(c, &mut new)?;
+        if new.dunning.levels.is_empty() {
+            new.dunning.levels = old.dunning.levels.clone();
+        }
+        let rebuild = new.tax.bookkeeping != old.tax.bookkeeping || new.tax.small_business != old.tax.small_business;
+        if rebuild && old.tax.locked_until.is_some() {
+            crate::bail_user!("Buchführungsart und Kleinunternehmerstatus können nach einer Festschreibung nicht mehr geändert werden.");
+        }
+        cfg::save(c, &new)?;
+        if rebuild {
+            posting::rebuild_all(c)?;
+        }
+        Ok(new)
+    })
+    .map(Json)
+}
+
+#[derive(Deserialize, TS)]
+#[ts(export)]
+pub struct OnboardingInput {
+    pub settings: Settings,
+    pub bank_name: String,
+    pub bank_iban: String,
+    #[ts(type = "number")]
+    pub bank_opening: Decimal,
+    pub with_cash: bool,
+    #[ts(type = "number")]
+    pub cash_opening: Decimal,
+    pub demo: bool,
+}
+
+pub async fn onboarding(State(st): State<AppState>, Json(input): Json<OnboardingInput>) -> ApiResult<SystemStatus> {
+    st.write(|c| {
+        let current = cfg::load(c)?;
+        let mut s = input.settings;
+        if s.tax.chart != current.tax.chart {
+            cfg::change_chart(c, &s.tax.chart)?;
+        }
+        s.onboarded = true;
+        sanitize_refs(c, &mut s)?;
+        if s.dunning.levels.is_empty() {
+            s.dunning = DunningSettings::default();
+        }
+        if s.docs.texts.is_empty() {
+            s.docs.texts = crate::services::defaults::default_texts();
+        }
+        cfg::save(c, &s)?;
+        let opening_date = ymd(today().year(), 1, 1);
+        let has_accounts = db::scalar_i64(c, "SELECT COUNT(*) FROM payment_accounts", &[])? > 0;
+        if !has_accounts {
+            finance::save_account(
+                c,
+                PaymentAccount {
+                    name: if input.bank_name.trim().is_empty() { "Geschäftskonto".into() } else { input.bank_name.clone() },
+                    kind: "bank".into(),
+                    iban: if input.bank_iban.is_empty() { s.company.iban.clone() } else { input.bank_iban.clone() },
+                    bic: s.company.bic.clone(),
+                    bank_name: s.company.bank_name.clone(),
+                    opening_balance: input.bank_opening,
+                    opening_date,
+                    color: "blue".into(),
+                    ..Default::default()
+                },
+            )?;
+            if input.with_cash {
+                finance::save_account(
+                    c,
+                    PaymentAccount { name: "Kasse".into(), kind: "cash".into(), opening_balance: input.cash_opening, opening_date, color: "teal".into(), ..Default::default() },
+                )?;
+            }
+        }
+        if input.demo {
+            demo::load(c)?;
+        }
+        Ok(())
+    })?;
+    status(State(st)).await
+}
+
+pub async fn demo(State(st): State<AppState>) -> ApiResult<SystemStatus> {
+    st.write(|c| {
+        let existing = db::scalar_i64(c, "SELECT (SELECT COUNT(*) FROM documents) + (SELECT COUNT(*) FROM receipts) + (SELECT COUNT(*) FROM contacts)", &[])?;
+        if existing > 0 {
+            crate::bail_user!("Demodaten können nur in einen leeren Datenbestand geladen werden. Bitte zuerst alle Daten zurücksetzen.");
+        }
+        if db::scalar_i64(c, "SELECT COUNT(*) FROM payment_accounts", &[])? == 0 {
+            finance::save_account(
+                c,
+                PaymentAccount {
+                    name: "Geschäftskonto".into(),
+                    kind: "bank".into(),
+                    opening_balance: Decimal::from(12500),
+                    opening_date: ymd(today().year(), 1, 1),
+                    color: "blue".into(),
+                    ..Default::default()
+                },
+            )?;
+        }
+        demo::load(c)
+    })?;
+    status(State(st)).await
+}
+
+pub async fn rebuild(State(st): State<AppState>) -> ApiResult<super::MessageResponse> {
+    st.write(|c| {
+        posting::rebuild_all(c)?;
+        let n = db::scalar_i64(c, "SELECT COUNT(*) FROM journal_entries", &[])?;
+        Ok(super::MessageResponse { message: format!("{n} Buchungssätze neu erzeugt") })
+    })
+    .map(Json)
+}
+
+pub async fn backup(State(st): State<AppState>) -> Result<Response, AppError> {
+    let tmp = st.data_dir.join(format!("backup-{}.db", uuid::Uuid::new_v4()));
+    {
+        let conn = st.db();
+        conn.execute("VACUUM INTO ?1", [tmp.display().to_string()]).map_err(AppError::from)?;
+    }
+    let db_bytes = std::fs::read(&tmp).map_err(AppError::from)?;
+    let _ = std::fs::remove_file(&tmp);
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut zip = zip::ZipWriter::new(&mut buf);
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("sqonto.db", opts).map_err(AppError::from)?;
+        zip.write_all(&db_bytes).map_err(AppError::from)?;
+        if let Ok(entries) = std::fs::read_dir(st.files_dir()) {
+            for e in entries.flatten() {
+                if let Ok(bytes) = std::fs::read(e.path()) {
+                    zip.start_file(format!("files/{}", e.file_name().to_string_lossy()), opts).map_err(AppError::from)?;
+                    zip.write_all(&bytes).map_err(AppError::from)?;
+                }
+            }
+        }
+        zip.finish().map_err(AppError::from)?;
+    }
+    let name = format!("Sqonto-Datensicherung-{}.zip", chrono::Local::now().format("%Y-%m-%d_%H%M"));
+    Ok(file_response(buf.into_inner(), "application/zip", &name, true))
+}
+
+pub async fn restore(State(st): State<AppState>, mut mp: Multipart) -> ApiResult<SystemStatus> {
+    let mut bytes = None;
+    while let Some(field) = mp.next_field().await.map_err(|e| AppError::bad(e.to_string()))? {
+        if field.name() == Some("file") {
+            bytes = Some(field.bytes().await.map_err(|e| AppError::bad(e.to_string()))?.to_vec());
+        }
+    }
+    let bytes = bytes.ok_or_else(|| AppError::bad("Keine Datei übermittelt"))?;
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|_| AppError::bad("Die Datei ist keine gültige Sqonto-Datensicherung (ZIP)."))?;
+    let mut db_bytes = Vec::new();
+    // Backups from before the rename contain "kontor.db".
+    let db_index = archive
+        .index_for_name("sqonto.db")
+        .or_else(|| archive.index_for_name("kontor.db"))
+        .ok_or_else(|| AppError::bad("Die Sicherung enthält keine Datenbank (sqonto.db)."))?;
+    archive.by_index(db_index).map_err(AppError::from)?.read_to_end(&mut db_bytes).map_err(AppError::from)?;
+    if !db_bytes.starts_with(b"SQLite format 3") {
+        return Err(AppError::bad("Die Datenbank in der Sicherung ist beschädigt."));
+    }
+    let db_path = st.data_dir.join("sqonto.db");
+    {
+        let mut guard = st.db();
+        *guard = rusqlite::Connection::open_in_memory().map_err(AppError::from)?;
+        for suffix in ["-wal", "-shm"] {
+            let _ = std::fs::remove_file(st.data_dir.join(format!("sqonto.db{suffix}")));
+        }
+        std::fs::write(&db_path, &db_bytes).map_err(AppError::from)?;
+        let files_dir = st.files_dir();
+        let _ = std::fs::remove_dir_all(&files_dir);
+        std::fs::create_dir_all(&files_dir).map_err(AppError::from)?;
+        for i in 0..archive.len() {
+            let mut f = archive.by_index(i).map_err(AppError::from)?;
+            let name = f.name().map(|n| n.to_string()).unwrap_or_default();
+            if let Some(rest) = name.strip_prefix("files/")
+                && !rest.is_empty()
+                && !rest.contains("..")
+                && !rest.contains('/')
+            {
+                let mut data = Vec::new();
+                f.read_to_end(&mut data).map_err(AppError::from)?;
+                std::fs::write(files_dir.join(rest), data).map_err(AppError::from)?;
+            }
+        }
+        *guard = db::open(&db_path).map_err(AppError::from)?;
+        cfg::ensure_seeded(&guard).map_err(AppError::from)?;
+    }
+    status(State(st)).await
+}
+
+#[derive(Deserialize, TS)]
+#[ts(export)]
+pub struct ResetRequest {
+    pub confirm: String,
+}
+
+pub async fn reset(State(st): State<AppState>, Json(req): Json<ResetRequest>) -> ApiResult<SystemStatus> {
+    if req.confirm != "LÖSCHEN" {
+        return Err(AppError::bad("Bitte zur Bestätigung LÖSCHEN eingeben."));
+    }
+    st.write(|c| {
+        for t in [
+            "journal_lines", "journal_entries", "allocations", "transactions", "dunnings", "document_lines", "documents", "receipt_lines",
+            "receipts", "assets", "manual_entries", "payment_accounts", "articles", "contacts", "activities", "ustva_filings", "files",
+            "number_ranges", "layouts", "accounts",
+        ] {
+            c.execute(&format!("DELETE FROM {t}"), [])?;
+        }
+        c.execute("DELETE FROM meta WHERE key != 'schema_version'", [])?;
+        cfg::ensure_seeded(c)?;
+        Ok(())
+    })?;
+    let _ = std::fs::remove_dir_all(st.files_dir());
+    let _ = std::fs::create_dir_all(st.files_dir());
+    status(State(st)).await
+}
+
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct FontList {
+    pub recommended: Vec<String>,
+    pub all: Vec<String>,
+}
+
+pub async fn fonts(State(st): State<AppState>) -> ApiResult<FontList> {
+    let all = st.pdf.families().to_vec();
+    let recommended = PdfEngine::bundled_families().into_iter().filter(|f| all.iter().any(|a| a == f)).map(String::from).collect();
+    Ok(Json(FontList { recommended, all }))
+}
+
+#[derive(Deserialize)]
+pub struct SearchQ {
+    #[serde(default)]
+    q: String,
+}
+
+pub async fn search(State(st): State<AppState>, Query(q): Query<SearchQ>) -> ApiResult<Vec<masterdata::SearchHit>> {
+    st.read(|c| masterdata::search(c, &q.q)).map(Json)
+}
+
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct ActivityItem {
+    pub activity: Activity,
+    pub title: String,
+    pub link: String,
+}
+
+pub async fn activities(State(st): State<AppState>) -> ApiResult<Vec<ActivityItem>> {
+    st.read(|c| {
+        let mut out = Vec::new();
+        for a in db::query::<Activity>(c, "ORDER BY id DESC LIMIT 30", &[])? {
+            let (title, link) = match a.entity.as_str() {
+                "document" => match db::find::<Document>(c, a.entity_id)? {
+                    Some(d) => (
+                        format!("{} {}", crate::services::documents::type_label(&d.doc_type, &d.kind), if d.number.is_empty() { "Entwurf".into() } else { d.number }),
+                        format!("/dokumente/{}", d.id),
+                    ),
+                    None => continue,
+                },
+                "receipt" => match db::find::<Receipt>(c, a.entity_id)? {
+                    Some(r) => (format!("Beleg {}", r.number), format!("/belege/{}", r.id)),
+                    None => continue,
+                },
+                "contact" => match db::find::<Contact>(c, a.entity_id)? {
+                    Some(k) => (k.display_name(), format!("/kontakte/{}", k.id)),
+                    None => continue,
+                },
+                _ => (a.entity.clone(), String::new()),
+            };
+            out.push(ActivityItem { activity: a, title, link });
+        }
+        Ok(out)
+    })
+    .map(Json)
+}
+
+pub async fn upload(State(st): State<AppState>, mut mp: Multipart) -> ApiResult<FileMeta> {
+    while let Some(field) = mp.next_field().await.map_err(|e| AppError::bad(e.to_string()))? {
+        if field.name() != Some("file") {
+            continue;
+        }
+        let filename = field.file_name().unwrap_or("upload").to_string();
+        let mut mime = field.content_type().unwrap_or("application/octet-stream").to_string();
+        if mime == "application/octet-stream" {
+            mime = mime_guess::from_path(&filename).first_or_octet_stream().to_string();
+        }
+        let bytes = field.bytes().await.map_err(|e| AppError::bad(e.to_string()))?;
+        return save_file(&st, &filename, &mime, &bytes).map(Json);
+    }
+    Err(AppError::bad("Keine Datei übermittelt"))
+}
+
+pub fn save_file(st: &AppState, filename: &str, mime: &str, bytes: &[u8]) -> Result<FileMeta, AppError> {
+    let uuid = uuid::Uuid::new_v4().to_string();
+    std::fs::create_dir_all(st.files_dir()).map_err(AppError::from)?;
+    std::fs::write(st.files_dir().join(&uuid), bytes).map_err(AppError::from)?;
+    let mut meta = FileMeta { id: 0, uuid, filename: filename.to_string(), mime: mime.to_string(), size: bytes.len() as i64, created_at: now_str() };
+    st.write(|c| db::insert(c, &mut meta))?;
+    Ok(meta)
+}
+
+#[derive(Deserialize)]
+pub struct FileQ {
+    #[serde(default)]
+    download: bool,
+}
+
+pub async fn file(State(st): State<AppState>, Path(id): Path<i64>, Query(q): Query<FileQ>) -> Result<Response, AppError> {
+    let meta: FileMeta = st.read(|c| db::get(c, id))?;
+    let bytes = std::fs::read(st.files_dir().join(&meta.uuid)).map_err(|_| AppError::not_found("Datei nicht gefunden"))?;
+    Ok(file_response(bytes, &meta.mime, &meta.filename, q.download))
+}
+
+// ---------------------------------------------------------------- Layouts
+
+pub async fn layouts(State(st): State<AppState>) -> ApiResult<Vec<Layout>> {
+    st.read(|c| db::query::<Layout>(c, "ORDER BY is_default DESC, name", &[])).map(Json)
+}
+
+pub async fn layout(State(st): State<AppState>, Path(id): Path<i64>) -> ApiResult<Layout> {
+    st.read(|c| db::get(c, id)).map(Json)
+}
+
+pub async fn create_layout(State(st): State<AppState>, Json(mut l): Json<Layout>) -> ApiResult<Layout> {
+    st.write(|c| {
+        l.id = 0;
+        if l.name.trim().is_empty() {
+            l.name = "Neues Layout".into();
+        }
+        l.is_default = db::scalar_i64(c, "SELECT COUNT(*) FROM layouts", &[])? == 0;
+        l.created_at = now_str();
+        l.updated_at = now_str();
+        db::insert(c, &mut l)?;
+        Ok(l)
+    })
+    .map(Json)
+}
+
+pub async fn update_layout(State(st): State<AppState>, Path(id): Path<i64>, Json(mut l): Json<Layout>) -> ApiResult<Layout> {
+    st.write(|c| {
+        let old: Layout = db::get(c, id)?;
+        l.id = id;
+        l.is_default = old.is_default;
+        l.created_at = old.created_at;
+        l.updated_at = now_str();
+        db::update(c, &l)?;
+        Ok(l)
+    })
+    .map(Json)
+}
+
+pub async fn delete_layout(State(st): State<AppState>, Path(id): Path<i64>) -> ApiResult<super::MessageResponse> {
+    st.write(|c| {
+        if db::scalar_i64(c, "SELECT COUNT(*) FROM layouts", &[])? <= 1 {
+            crate::bail_user!("Das letzte Layout kann nicht gelöscht werden.");
+        }
+        let l: Layout = db::get(c, id)?;
+        c.execute("UPDATE documents SET layout_id = NULL WHERE layout_id = ?1", [id])?;
+        db::delete::<Layout>(c, id)?;
+        if l.is_default {
+            c.execute("UPDATE layouts SET is_default = 1 WHERE id = (SELECT MIN(id) FROM layouts)", [])?;
+        }
+        Ok(super::MessageResponse { message: "Layout gelöscht".into() })
+    })
+    .map(Json)
+}
+
+pub async fn default_layout(State(st): State<AppState>, Path(id): Path<i64>) -> ApiResult<Vec<Layout>> {
+    st.write(|c| {
+        let _: Layout = db::get(c, id)?;
+        c.execute("UPDATE layouts SET is_default = (id = ?1)", [id])?;
+        let mut s = cfg::load(c)?;
+        s.docs.default_layout_id = Some(id);
+        cfg::save(c, &s)?;
+        db::query::<Layout>(c, "ORDER BY is_default DESC, name", &[])
+    })
+    .map(Json)
+}
+
+#[derive(Deserialize, TS)]
+#[ts(export)]
+pub struct LayoutPreviewRequest {
+    pub config: LayoutConfig,
+    pub document_id: Option<i64>,
+    /// invoice | quote | delivery | dunning
+    pub doc_type: Option<String>,
+}
+
+pub async fn layout_preview(State(st): State<AppState>, Json(req): Json<LayoutPreviewRequest>) -> ApiResult<Pages> {
+    let job = st.read(|c| {
+        let (mut doc, lines) = match req.document_id {
+            Some(id) => (db::get::<Document>(c, id)?, crate::services::documents::lines_of(c, id)?),
+            None => data::sample_document(),
+        };
+        if let Some(t) = &req.doc_type
+            && req.document_id.is_none()
+        {
+            doc.doc_type = t.clone();
+            doc.title = crate::services::documents::type_label(t, "standard").into();
+            if t == "quote" {
+                doc.number = "AN-2026-0017".into();
+                doc.valid_until = Some(today() + chrono::Duration::days(30));
+                doc.due_date = None;
+            } else if t == "delivery" {
+                doc.number = "LS-2026-0008".into();
+            }
+        }
+        data::document_job(c, &st.data_dir, &doc, &lines, Some(req.config.clone()))
+    })?;
+    Ok(Json(Pages { pages: render_svgs(&st, job).await? }))
+}
+
+pub async fn number_ranges(State(st): State<AppState>) -> ApiResult<Vec<NumberRange>> {
+    st.read(|c| db::query::<NumberRange>(c, "ORDER BY id", &[])).map(Json)
+}
+
+pub async fn save_number_ranges(State(st): State<AppState>, Json(ranges): Json<Vec<NumberRange>>) -> ApiResult<Vec<NumberRange>> {
+    st.write(|c| {
+        for r in ranges {
+            if !r.format.contains("{N") {
+                crate::bail_user!("Das Format „{}“ muss einen Zähler wie {{NNNN}} enthalten.", r.format);
+            }
+            let mut old = db::query_one::<NumberRange>(c, "WHERE key = ?1", &[v(r.key.clone())])?
+                .ok_or_else(|| anyhow::anyhow!("Unbekannter Nummernkreis {}", r.key))?;
+            old.format = r.format;
+            old.next = r.next.max(1);
+            old.reset_yearly = r.reset_yearly;
+            db::update(c, &old)?;
+        }
+        db::query::<NumberRange>(c, "ORDER BY id", &[])
+    })
+    .map(Json)
+}

@@ -1,0 +1,72 @@
+[package]
+name = "sqonto"
+version = "0.1.0"
+edition = "2024"
+description = "Sqonto – lokale Buchhaltungs- und Rechnungssoftware"
+license = "AGPL-3.0-or-later"
+default-run = "sqonto-server"
+
+[lib]
+path = "src/lib.rs"
+
+# Headless server (browser / Vite dev server)
+[[bin]]
+name = "sqonto-server"
+path = "src/main.rs"
+
+# Desktop app: native window around the same server
+[[bin]]
+name = "sqonto-desktop"
+path = "src/bin/sqonto-desktop.rs"
+required-features = ["desktop"]
+
+[features]
+default = ["desktop"]
+desktop = ["dep:wry", "dep:tao", "dep:rfd"]
+
+[dependencies]
+anyhow = "1.0.104"
+axum = { version = "0.8.9", features = ["multipart", "macros"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+comemo = "0.5.1"
+csv = "1.4.0"
+encoding_rs = "0.8.42"
+lopdf = "0.45.0"
+mime_guess = "2.0.5"
+open = "5.4.4"
+parking_lot = "0.12.5"
+qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
+roxmltree = "0.21.1"
+rusqlite = { version = "0.40.2", features = ["bundled", "backup", "chrono", "serde_json"] }
+rust-embed = "8.13.0"
+rust_decimal = { version = "1.43.0", features = ["serde-float", "maths"] }
+rust_decimal_macros = "1.40.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+thiserror = "2.0.21"
+tokio = { version = "1.53.3", features = ["full"] }
+tower-http = { version = "0.7.1", features = ["cors", "trace", "compression-gzip"] }
+tracing = "0.1.44"
+tracing-subscriber = "0.3.23"
+ts-rs = { version = "12.0.1", features = ["chrono-impl", "serde-json-impl"] }
+typst = "0.15.1"
+typst-assets = { version = "0.15.1", features = ["fonts"] }
+typst-kit = { version = "0.15.1", features = ["embedded-fonts", "scan-fonts"] }
+typst-layout = "0.15.1"
+typst-pdf = "0.15.1"
+typst-svg = "0.15.1"
+uuid = { version = "1.28.0", features = ["v4"] }
+zip = { version = "9.0.3", default-features = false, features = ["deflate"] }
+
+# Desktop app (feature "desktop")
+wry = { version = "0.57", optional = true }
+tao = { version = "0.37", optional = true }
+rfd = { version = "0.17", optional = true }
+
+[build-dependencies]
+winresource = "0.1"
+
+# Its debug info makes the MSVC linker warn (LNK4209) on every debug build.
+[profile.dev.package.hayro-interpret]
+debug = false

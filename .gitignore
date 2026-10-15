@@ -1,0 +1,22 @@
+# Build output
+/backend/target/
+/frontend/node_modules/
+/frontend/dist/
+/dist/
+
+# Local data: databases, uploaded receipts, logs, WebView profile
+data/
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Claude Code configuration
+.claude/

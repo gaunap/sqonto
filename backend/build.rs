@@ -1,0 +1,20 @@
+//! Embeds icon and version information into the Windows executables.
+
+fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=assets/icons/sqonto.ico");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+        return;
+    }
+    let mut res = winresource::WindowsResource::new();
+    // Resource id 1 – the desktop window loads its icon from here.
+    res.set_icon_with_id("assets/icons/sqonto.ico", "1");
+    res.set("ProductName", "Sqonto");
+    res.set("FileDescription", "Sqonto – Buchhaltung");
+    res.set("CompanyName", "Sqonto");
+    res.set("LegalCopyright", "Sqonto");
+    if let Err(e) = res.compile() {
+        // A missing resource compiler only costs the icon, not the build.
+        println!("cargo:warning=Programmsymbol nicht eingebunden: {e}");
+    }
+}
