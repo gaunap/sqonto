@@ -163,7 +163,7 @@ werden nicht verpackt.
 
 ## Lizenz
 
-Copyright © 2026 die Sqonto-Mitwirkenden
+Copyright © 2026 Johannes Asal
 
 Sqonto ist freie Software unter der [GNU Affero General Public License, Version 3 oder
 später](LICENSE) (AGPL-3.0-or-later). Sie dürfen Sqonto nutzen, untersuchen, verändern und

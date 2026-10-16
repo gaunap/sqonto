@@ -1,3 +1,7 @@
+# Copyright (C) 2026 Johannes Asal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# See LICENSE in the project root for the full license and warranty disclaimer.
+
 [env]
 TS_RS_EXPORT_DIR = { value = "../frontend/src/api/types", relative = true }
 TS_RS_LARGE_INT = "number"

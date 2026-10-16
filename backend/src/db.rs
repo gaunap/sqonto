@@ -1,3 +1,7 @@
+// Copyright (C) 2026 Johannes Asal
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// See LICENSE in the project root for the full license and warranty disclaimer.
+
 //! Database layer: SQLite connection, schema migration and a small typed
 //! entity mapping (`entity!` macro) so that every table row maps 1:1 onto a
 //! strongly typed Rust struct that is also exported to TypeScript.

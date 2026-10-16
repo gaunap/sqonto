@@ -1,3 +1,7 @@
+// Copyright (C) 2026 Johannes Asal
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// See LICENSE in the project root for the full license and warranty disclaimer.
+
 //! Sqonto – lokale Buchhaltungs- und Rechnungssoftware.
 //!
 //! The library contains the complete application: database, bookkeeping, PDF output and the

@@ -1,3 +1,7 @@
+// Copyright (C) 2026 Johannes Asal
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// See LICENSE in the project root for the full license and warranty disclaimer.
+
 //! Kontenrahmen SKR03 / SKR04 (kuratierte Auswahl der gängigsten Konten).
 //!
 //! Each concept carries both account numbers plus the mapping keys used by the

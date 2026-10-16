@@ -1,3 +1,7 @@
+// Copyright (C) 2026 Johannes Asal
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// See LICENSE in the project root for the full license and warranty disclaimer.
+
 //! Embeds icon and version information into the Windows executables.
 
 fn main() {
@@ -12,7 +16,7 @@ fn main() {
     res.set("ProductName", "Sqonto");
     res.set("FileDescription", "Sqonto – Buchhaltung");
     res.set("CompanyName", "Sqonto");
-    res.set("LegalCopyright", "Sqonto");
+    res.set("LegalCopyright", "Copyright (C) 2026 Johannes Asal");
     if let Err(e) = res.compile() {
         // A missing resource compiler only costs the icon, not the build.
         println!("cargo:warning=Programmsymbol nicht eingebunden: {e}");

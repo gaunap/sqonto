@@ -1,3 +1,7 @@
+// Copyright (C) 2026 Johannes Asal
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// See LICENSE in the project root for the full license and warranty disclaimer.
+
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router';
@@ -682,7 +686,7 @@ function AboutTab() {
           </div>
         </Group>
         <Stack gap="sm">
-          <Text size="sm">Copyright © 2026 die Sqonto-Mitwirkenden</Text>
+          <Text size="sm">Copyright © 2026 Johannes Asal</Text>
           <Text size="sm">
             Sqonto ist freie Software: Sie können es unter den Bedingungen der GNU Affero General Public License, wie von der Free Software Foundation veröffentlicht, weitergeben und/oder
             verändern – entweder gemäß Version 3 der Lizenz oder (nach Ihrer Wahl) jeder späteren Version.

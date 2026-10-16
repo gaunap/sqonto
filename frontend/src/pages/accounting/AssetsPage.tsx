@@ -1,3 +1,7 @@
+// Copyright (C) 2026 Johannes Asal
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// See LICENSE in the project root for the full license and warranty disclaimer.
+
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { Alert, Anchor, Badge, Box, Button, Card, Drawer, Group, NumberInput, Select, SimpleGrid, Stack, Table, Text, TextInput, Textarea } from '@mantine/core';

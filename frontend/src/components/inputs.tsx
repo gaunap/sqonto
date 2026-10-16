@@ -1,3 +1,7 @@
+// Copyright (C) 2026 Johannes Asal
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// See LICENSE in the project root for the full license and warranty disclaimer.
+
 import { useMemo, useState, type FocusEvent, type KeyboardEvent, type MouseEvent } from 'react';
 import { Button, Group, NumberInput, Select, Text, type NumberInputProps, type SelectProps, Badge } from '@mantine/core';
 import { DateInput, type DateInputProps } from '@mantine/dates';

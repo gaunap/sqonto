@@ -1,3 +1,7 @@
+# Copyright (C) 2026 Johannes Asal
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# See LICENSE in the project root for the full license and warranty disclaimer.
+
 # Exercise the actual generated installer in CI, including preservation of user data.
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent

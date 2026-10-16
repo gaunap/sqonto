@@ -1,3 +1,7 @@
+// Copyright (C) 2026 Johannes Asal
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// See LICENSE in the project root for the full license and warranty disclaimer.
+
 //! E-Rechnung: XRechnung (CII) und ZUGFeRD/Factur-X (EN 16931) erzeugen,
 //! eingehende XRechnungen (CII und UBL) sowie ZUGFeRD-PDFs einlesen.
 

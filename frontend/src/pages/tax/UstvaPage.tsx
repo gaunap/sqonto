@@ -1,3 +1,7 @@
+// Copyright (C) 2026 Johannes Asal
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// See LICENSE in the project root for the full license and warranty disclaimer.
+
 import { useEffect, useState } from 'react';
 import { Alert, Badge, Box, Button, Card, Grid, Group, Modal, Paper, SimpleGrid, Stack, Switch, Table, Text, TextInput, ThemeIcon, UnstyledButton } from '@mantine/core';
 import { IconCalculator, IconCheck, IconDownload, IconInfoCircle, IconSend, IconX } from '@tabler/icons-react';
