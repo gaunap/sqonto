@@ -4211,7 +4211,7 @@ dependencies = [
 
 [[package]]
 name = "sqonto"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "axum",
