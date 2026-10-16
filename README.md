@@ -3,6 +3,8 @@
 Lokale Buchhaltungssoftware für Selbstständige, Freiberufler und kleine Unternehmen. Läuft
 vollständig auf dem eigenen Rechner (keine Cloud), die Daten liegen in einer SQLite-Datenbank.
 
+Projektwebsite: [sqonto.de](https://sqonto.de).
+
 ## Funktionen
 
 - **Verkauf:** Angebote, Auftragsbestätigungen, Lieferscheine, Rechnungen, Abschlags- und
