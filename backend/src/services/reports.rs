@@ -770,9 +770,10 @@ pub fn period_range(year: i32, period: &str) -> (NaiveDate, NaiveDate, String) {
     }
 }
 
+/// Deadlines falling on a weekend or public holiday move to the next working day (§ 108 Abs. 3 AO).
 fn next_workday(d: NaiveDate) -> NaiveDate {
     let mut d = d;
-    while d.weekday() == Weekday::Sat || d.weekday() == Weekday::Sun {
+    while d.weekday() == Weekday::Sat || d.weekday() == Weekday::Sun || crate::util::is_national_holiday(d) {
         d += Duration::days(1);
     }
     d
@@ -1439,6 +1440,17 @@ mod tests {
         let mut m = ManualEntry { date, description: "Miete".into(), debit_account: "4210".into(), credit_account: "1200".into(), amount: dec!(500), ..Default::default() };
         let id = db::insert(conn, &mut m).unwrap();
         crate::services::posting::rebuild(conn, crate::services::posting::Source::Manual(id)).unwrap();
+    }
+
+    #[test]
+    fn ustva_due_dates_skip_weekends_and_holidays() {
+        // 10 April 2020 was Karfreitag, 13 April Ostermontag.
+        assert_eq!(ustva_due(ymd(2020, 3, 31), false), ymd(2020, 4, 14));
+        // 10 May 2018: Christi Himmelfahrt.
+        assert_eq!(ustva_due(ymd(2018, 4, 30), false), ymd(2018, 5, 11));
+        // Dauerfristverlängerung: one month later; 10 January 2026 is a Saturday → Monday.
+        assert_eq!(ustva_due(ymd(2025, 11, 30), true), ymd(2026, 1, 12));
+        assert_eq!(ustva_due(ymd(2026, 9, 30), false), ymd(2026, 10, 12));
     }
 
     #[test]

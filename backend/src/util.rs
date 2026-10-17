@@ -221,10 +221,52 @@ pub fn format_iban(s: &str) -> String {
     n.as_bytes().chunks(4).map(|c| String::from_utf8_lossy(c).to_string()).collect::<Vec<_>>().join(" ")
 }
 
+/// Easter Sunday (Gregorian calendar, anonymous algorithm).
+pub fn easter_sunday(year: i32) -> NaiveDate {
+    let a = year % 19;
+    let b = year / 100;
+    let c = year % 100;
+    let d = b / 4;
+    let e = b % 4;
+    let f = (b + 8) / 25;
+    let g = (b - f + 1) / 3;
+    let h = (19 * a + b - d - g + 15) % 30;
+    let i = c / 4;
+    let k = c % 4;
+    let l = (32 + 2 * e + 2 * i - h - k) % 7;
+    let m = (a + 11 * h + 22 * l) / 451;
+    let month = (h + l - 7 * m + 114) / 31;
+    let day = (h + l - 7 * m + 114) % 31 + 1;
+    ymd(year, month as u32, day as u32)
+}
+
+/// Public holiday in all German states (regional holidays such as Fronleichnam are not included).
+pub fn is_national_holiday(d: NaiveDate) -> bool {
+    if matches!((d.month(), d.day()), (1, 1) | (5, 1) | (10, 3) | (12, 25) | (12, 26)) {
+        return true;
+    }
+    let easter = easter_sunday(d.year());
+    [-2, 1, 39, 50].iter().any(|offset| d == easter + chrono::Duration::days(*offset))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use rust_decimal_macros::dec;
+
+    #[test]
+    fn easter_and_holidays() {
+        assert_eq!(easter_sunday(2024), ymd(2024, 3, 31));
+        assert_eq!(easter_sunday(2025), ymd(2025, 4, 20));
+        assert_eq!(easter_sunday(2026), ymd(2026, 4, 5));
+        assert_eq!(easter_sunday(2038), ymd(2038, 4, 25));
+        for d in [ymd(2020, 4, 10), ymd(2020, 4, 13), ymd(2018, 5, 10), ymd(2019, 6, 10), ymd(2026, 10, 3), ymd(2026, 12, 26)] {
+            assert!(is_national_holiday(d), "{d}");
+        }
+        for d in [ymd(2020, 4, 14), ymd(2026, 6, 4), ymd(2026, 11, 1)] {
+            assert!(!is_national_holiday(d), "{d}");
+        }
+    }
 
     #[test]
     fn formats_german_numbers() {
