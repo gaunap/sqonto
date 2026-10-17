@@ -230,6 +230,21 @@ CREATE INDEX IF NOT EXISTS idx_allocations_tx ON allocations(transaction_id);
 CREATE INDEX IF NOT EXISTS idx_allocations_doc ON allocations(document_id);
 CREATE INDEX IF NOT EXISTS idx_allocations_receipt ON allocations(receipt_id);
 
+-- Bankregeln: automatic booking of recurring bank movements
+CREATE TABLE IF NOT EXISTS bank_rules (
+  id           INTEGER PRIMARY KEY,
+  name         TEXT NOT NULL DEFAULT '',
+  counterparty TEXT NOT NULL DEFAULT '',
+  iban         TEXT NOT NULL DEFAULT '',
+  purpose      TEXT NOT NULL DEFAULT '',
+  direction    TEXT NOT NULL DEFAULT '',
+  account      TEXT NOT NULL,
+  tax_rate     TEXT NOT NULL DEFAULT '0',
+  description  TEXT NOT NULL DEFAULT '',
+  active       INTEGER NOT NULL DEFAULT 1,
+  created_at   TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS receipts (
   id             INTEGER PRIMARY KEY,
   number         TEXT NOT NULL DEFAULT '',

@@ -690,6 +690,29 @@ entity! {
 }
 
 entity! {
+    /// Booking rule for bank movements (Bankregel).
+    pub struct BankRule in "bank_rules" {
+        pub id: i64,
+        pub name: String,
+        /// Part of the counterparty name (case-insensitive).
+        pub counterparty: String,
+        /// IBAN of the counterparty.
+        pub iban: String,
+        /// Part of the purpose (case-insensitive).
+        pub purpose: String,
+        /// "" | in | out
+        pub direction: String,
+        pub account: String,
+        #[ts(type = "number")]
+        pub tax_rate: Decimal,
+        /// Booking text; empty = purpose of the movement.
+        pub description: String,
+        pub active: bool,
+        pub created_at: String,
+    }
+}
+
+entity! {
     pub struct UstvaFiling in "ustva_filings" {
         pub id: i64,
         pub year: i64,

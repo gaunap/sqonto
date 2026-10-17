@@ -241,6 +241,32 @@ pub async fn import_transactions(State(st): State<AppState>, Json(r): Json<Impor
     st.write(|c| bankimport::import(c, r.account_id, r.transactions.into_iter().filter(|t| !t.duplicate).collect(), r.auto_match)).map(Json)
 }
 
+// ---------------------------------------------------------------- Bankregeln
+
+pub async fn bank_rules(State(st): State<AppState>) -> ApiResult<Vec<crate::models::BankRule>> {
+    st.read(crate::services::bankrules::list).map(Json)
+}
+
+pub async fn create_bank_rule(State(st): State<AppState>, Json(mut r): Json<crate::models::BankRule>) -> ApiResult<crate::models::BankRule> {
+    r.id = 0;
+    st.write(|c| crate::services::bankrules::save(c, r)).map(Json)
+}
+
+pub async fn update_bank_rule(State(st): State<AppState>, Path(id): Path<i64>, Json(mut r): Json<crate::models::BankRule>) -> ApiResult<crate::models::BankRule> {
+    r.id = id;
+    st.write(|c| crate::services::bankrules::save(c, r)).map(Json)
+}
+
+pub async fn delete_bank_rule(State(st): State<AppState>, Path(id): Path<i64>) -> ApiResult<MessageResponse> {
+    st.write(|c| crate::services::bankrules::delete(c, id)).map(|_| Json(MessageResponse { message: "Regel gelöscht".into() }))
+}
+
+pub async fn apply_bank_rules(State(st): State<AppState>) -> ApiResult<MessageResponse> {
+    st.write(crate::services::bankrules::apply_open).map(|n| {
+        Json(MessageResponse { message: if n == 1 { "1 Kontobewegung gebucht".into() } else { format!("{n} Kontobewegungen gebucht") } })
+    })
+}
+
 // ---------------------------------------------------------------- Kassenbuch
 
 #[derive(Deserialize)]

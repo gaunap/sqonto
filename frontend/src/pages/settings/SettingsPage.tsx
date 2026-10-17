@@ -23,6 +23,7 @@ import {
   NumberInput,
   Paper,
   Radio,
+  SegmentedControl,
   Select,
   SimpleGrid,
   Stack,
@@ -60,9 +61,9 @@ import {
   IconCash,
 } from '@tabler/icons-react';
 import { api, apiUrl, downloadFile } from '@/api/client';
-import { notifyError, useAction, useApi, useLayouts, usePaymentAccounts, useSettings, useStatus } from '@/api/hooks';
-import type { BackupStatus, DocumentListItem, FileMeta, Layout, MessageResponse, NumberRange, PaymentAccount, Settings, TransactionView } from '@/api/types';
-import { DateField, MoneyInput } from '@/components/inputs';
+import { notifyError, useAction, useApi, useChart, useLayouts, usePaymentAccounts, useSettings, useStatus } from '@/api/hooks';
+import type { BackupStatus, BankRule, DocumentListItem, FileMeta, Layout, MessageResponse, NumberRange, PaymentAccount, Settings, TransactionView } from '@/api/types';
+import { AccountSelect, DateField, MoneyInput } from '@/components/inputs';
 import { Page, PageHeader, SqontoLogo, UnsavedChangesGuard, confirmAction } from '@/components/ui';
 import { date, dateTime, money, today } from '@/lib/format';
 import { BOOKKEEPING, COUNTRIES, EINVOICE_FORMATS } from '@/lib/labels';
@@ -610,6 +611,124 @@ function DunningTab({ s, patch }: { s: Settings; patch: Patch }) {
   );
 }
 
+const EMPTY_RULE: BankRule = { id: 0, name: '', counterparty: '', iban: '', purpose: '', direction: 'out', account: '', tax_rate: 19, description: '', active: true, created_at: '' };
+
+function BankRuleModal({ rule, onClose }: { rule: BankRule | null; onClose: () => void }) {
+  const [r, setR] = useState<BankRule>(EMPTY_RULE);
+  useEffect(() => {
+    if (rule) setR(rule);
+  }, [rule]);
+  const set = (p: Partial<BankRule>) => setR((x) => ({ ...x, ...p }));
+  const save = useAction((x: BankRule) => (x.id ? api.put(`/bank-rules/${x.id}`, x) : api.post('/bank-rules', x)), { success: 'Regel gespeichert', onSuccess: onClose });
+  return (
+    <Modal opened={!!rule} onClose={onClose} title={<Text fw={650}>{r.id ? 'Bankregel bearbeiten' : 'Neue Bankregel'}</Text>}>
+      <Stack gap="sm">
+        <Text size="sm" c="dimmed">
+          Importierte Kontobewegungen, auf die alle ausgefüllten Merkmale zutreffen, werden automatisch auf das Konto gebucht.
+        </Text>
+        <TextInput label="Name enthält" placeholder="z. B. Telekom" value={r.counterparty} onChange={(e) => set({ counterparty: e.currentTarget.value })} />
+        <TextInput label="IBAN" value={r.iban} onChange={(e) => set({ iban: e.currentTarget.value })} />
+        <TextInput label="Verwendungszweck enthält" value={r.purpose} onChange={(e) => set({ purpose: e.currentTarget.value })} />
+        <SegmentedControl
+          value={r.direction}
+          onChange={(v) => set({ direction: v })}
+          data={[
+            { value: 'out', label: 'Ausgaben' },
+            { value: 'in', label: 'Einnahmen' },
+            { value: '', label: 'Beide' },
+          ]}
+        />
+        <SimpleGrid cols={2} spacing="sm">
+          <AccountSelect label="Konto" value={r.account} onChange={(v) => set({ account: v ?? '' })} allAccounts />
+          <Select
+            label="Umsatzsteuer"
+            data={[
+              { value: '19', label: '19 %' },
+              { value: '7', label: '7 %' },
+              { value: '0', label: 'ohne' },
+            ]}
+            value={String(r.tax_rate)}
+            onChange={(v) => set({ tax_rate: Number(v ?? 0) })}
+          />
+        </SimpleGrid>
+        <TextInput label="Buchungstext" placeholder="Verwendungszweck der Bewegung" value={r.description} onChange={(e) => set({ description: e.currentTarget.value })} />
+        <Group justify="flex-end">
+          <Button variant="default" onClick={onClose}>
+            Abbrechen
+          </Button>
+          <Button onClick={() => save.mutate(r)} loading={save.isPending}>
+            Speichern
+          </Button>
+        </Group>
+      </Stack>
+    </Modal>
+  );
+}
+
+function BankRulesCard() {
+  const { data: rules } = useApi<BankRule[]>('/bank-rules');
+  const { data: chart } = useChart();
+  const [editing, setEditing] = useState<BankRule | null>(null);
+  const toggle = useAction((r: BankRule) => api.put(`/bank-rules/${r.id}`, { ...r, active: !r.active }));
+  const remove = useAction((id: number) => api.del(`/bank-rules/${id}`), { success: 'Regel gelöscht' });
+  const apply = useAction(() => api.post<MessageResponse>('/bank-rules/apply'), { success: (r) => r.message });
+  const criteria = (r: BankRule) =>
+    [r.counterparty && `Name enthält „${r.counterparty}“`, r.iban && `IBAN ${r.iban}`, r.purpose && `Zweck enthält „${r.purpose}“`].filter(Boolean).join(' · ');
+  return (
+    <Card>
+      <Group justify="space-between" mb="xs">
+        <Text fw={650}>Bankregeln</Text>
+        <Group gap="xs">
+          <Button variant="default" size="compact-sm" onClick={() => apply.mutate()} loading={apply.isPending} disabled={!rules?.length}>
+            Auf offene Umsätze anwenden
+          </Button>
+          <Button size="compact-sm" leftSection={<IconPlus size={14} />} onClick={() => setEditing(EMPTY_RULE)}>
+            Regel anlegen
+          </Button>
+        </Group>
+      </Group>
+      <Text size="sm" c="dimmed" mb="sm">
+        Wiederkehrende Kontobewegungen (z. B. Telefon, Miete) werden beim Import automatisch gebucht. Regeln lassen sich auch beim Zuordnen einer Bewegung anlegen.
+      </Text>
+      {!rules?.length ? (
+        <Text size="sm" c="dimmed">
+          Noch keine Regeln angelegt.
+        </Text>
+      ) : (
+        <Table verticalSpacing="xs">
+          <Table.Tbody>
+            {rules.map((r) => (
+              <Table.Tr key={r.id} style={{ opacity: r.active ? 1 : 0.5 }}>
+                <Table.Td>
+                  <Text size="sm" fw={500}>
+                    {criteria(r)}
+                  </Text>
+                  <Text size="xs" c="dimmed">
+                    {r.direction === 'in' ? 'Einnahmen' : r.direction === 'out' ? 'Ausgaben' : 'Einnahmen und Ausgaben'} → {r.account} {chart?.find((a) => a.number === r.account)?.name ?? ''}
+                    {r.tax_rate > 0 ? ` · ${r.tax_rate} % USt` : ''}
+                  </Text>
+                </Table.Td>
+                <Table.Td w={170}>
+                  <Group gap={4} justify="flex-end" wrap="nowrap">
+                    <Switch size="xs" checked={r.active} onChange={() => toggle.mutate(r)} aria-label="Aktiv" />
+                    <ActionIcon variant="subtle" onClick={() => setEditing(r)} aria-label="Regel bearbeiten">
+                      <IconEdit size={16} />
+                    </ActionIcon>
+                    <ActionIcon variant="subtle" color="red" onClick={() => confirmAction({ title: 'Regel löschen', message: `Die Regel „${criteria(r)}“ wird gelöscht.`, danger: true, confirmLabel: 'Löschen', onConfirm: () => remove.mutate(r.id) })} aria-label="Regel löschen">
+                      <IconTrash size={16} />
+                    </ActionIcon>
+                  </Group>
+                </Table.Td>
+              </Table.Tr>
+            ))}
+          </Table.Tbody>
+        </Table>
+      )}
+      <BankRuleModal rule={editing} onClose={() => setEditing(null)} />
+    </Card>
+  );
+}
+
 function AccountsTab() {
   const { data } = usePaymentAccounts();
   const [modal, setModal] = useState<{ open: boolean; account: PaymentAccount | null }>({ open: false, account: null });
@@ -648,6 +767,7 @@ function AccountsTab() {
         </Card>
       ))}
       <PaymentAccountModal opened={modal.open} onClose={() => setModal({ open: false, account: null })} account={modal.account} />
+      <BankRulesCard />
     </Stack>
   );
 }

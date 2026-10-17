@@ -20,6 +20,7 @@ export type * from './Asset';
 export type * from './AssetView';
 export type * from './BackupSettings';
 export type * from './BackupStatus';
+export type * from './BankRule';
 export type * from './Bwa';
 export type * from './BwaRow';
 export type * from './CashEntryInput';

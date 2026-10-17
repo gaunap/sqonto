@@ -342,6 +342,8 @@ pub struct ImportSummary {
     /// Not imported because they fall into the festgeschriebenen period.
     pub locked: i64,
     pub auto_matched: i64,
+    /// Booked by a Bankregel.
+    pub rules_applied: i64,
 }
 
 pub fn import(conn: &Connection, account_id: i64, mut txs: Vec<ImportedTx>, auto_match: bool) -> Result<ImportSummary> {
@@ -353,7 +355,8 @@ pub fn import(conn: &Connection, account_id: i64, mut txs: Vec<ImportedTx>, auto
         assign_hashes(account_id, &mut txs);
     }
     let locked_until = crate::services::settings::load(conn)?.tax.locked_until;
-    let (mut imported, mut skipped, mut locked, mut matched) = (0, 0, 0, 0);
+    let rules: Vec<crate::models::BankRule> = crate::services::bankrules::list(conn)?.into_iter().filter(|r| r.active).collect();
+    let (mut imported, mut skipped, mut locked, mut matched, mut ruled) = (0, 0, 0, 0, 0);
     for t in txs {
         let h = t.hash.clone();
         if db::scalar_i64(conn, "SELECT COUNT(*) FROM transactions WHERE account_id = ?1 AND import_hash = ?2", &[v(account_id), v(h.clone())])? > 0 {
@@ -399,8 +402,12 @@ pub fn import(conn: &Connection, account_id: i64, mut txs: Vec<ImportedTx>, auto
                 }
             }
         }
+        // Movements not matched to an invoice or receipt are booked by the Bankregeln.
+        if crate::services::bankrules::apply_to(conn, id, &rules)? {
+            ruled += 1;
+        }
     }
-    Ok(ImportSummary { imported, skipped, locked, auto_matched: matched })
+    Ok(ImportSummary { imported, skipped, locked, auto_matched: matched, rules_applied: ruled })
 }
 
 #[cfg(test)]

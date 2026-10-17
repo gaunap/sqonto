@@ -7,6 +7,7 @@
 pub mod archive;
 pub mod assets;
 pub mod bankimport;
+pub mod bankrules;
 pub mod calc;
 pub mod datev;
 pub mod defaults;

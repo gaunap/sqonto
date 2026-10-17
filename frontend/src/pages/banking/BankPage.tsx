@@ -49,6 +49,7 @@ import {
 import { api } from '@/api/client';
 import { useAction, useApi, useChart, usePaymentAccounts, useSettings } from '@/api/hooks';
 import type {
+  BankRule,
   Allocation,
   CsvMapping,
   DocumentListItem,
@@ -350,7 +351,7 @@ function ImportModal({ opened, onClose, accounts, defaultAccount }: { opened: bo
           </ThemeIcon>
           <Text fw={650}>{summary.imported} Umsätze importiert</Text>
           <Text size="sm" c="dimmed">
-            {summary.auto_matched} automatisch zugeordnet · {summary.skipped} Duplikate übersprungen
+            {summary.auto_matched} automatisch zugeordnet{summary.rules_applied > 0 && ` · ${summary.rules_applied} per Regel gebucht`} · {summary.skipped} Duplikate übersprungen
             {summary.locked > 0 && ` · ${summary.locked} im festgeschriebenen Zeitraum nicht importiert`}
           </Text>
           <Button onClick={onClose}>Schließen</Button>
@@ -376,6 +377,7 @@ function AssignDrawer({ tx, onClose }: { tx: TransactionView | null; onClose: ()
   const [rate, setRate] = useState('19');
   const [desc, setDesc] = useState('');
   const [amount, setAmount] = useState(0);
+  const [saveRule, setSaveRule] = useState(false);
 
   useEffect(() => {
     if (tx) {
@@ -384,6 +386,7 @@ function AssignDrawer({ tx, onClose }: { tx: TransactionView | null; onClose: ()
       setSearch('');
       setDesc(tx.tx.purpose);
       setAccount(null);
+      setSaveRule(false);
     }
   }, [tx]);
 
@@ -391,7 +394,32 @@ function AssignDrawer({ tx, onClose }: { tx: TransactionView | null; onClose: ()
   const rest = tx ? r2(tx.tx.amount - allocated) : 0;
   useEffect(() => setAmount(Math.abs(rest)), [rest]);
 
-  const save = useAction(() => api.put(`/transactions/${tx!.tx.id}`, { tx: tx!.tx, allocations: allocs.map(({ label, ...a }) => a) }), { success: 'Zuordnung gespeichert', onSuccess: onClose });
+  // A single booking on an account can become a Bankregel for this counterparty.
+  const ruleTarget = allocs.length === 1 && allocs[0].kind === 'account' && allocs[0].account !== transitAccount ? allocs[0] : null;
+  const ruleParty = tx ? tx.tx.counterparty.trim() || formatIban(tx.tx.counterparty_iban) : '';
+  const save = useAction(
+    async () => {
+      await api.put(`/transactions/${tx!.tx.id}`, { tx: tx!.tx, allocations: allocs.map(({ label, ...a }) => a) });
+      if (saveRule && ruleTarget) {
+        const byName = tx!.tx.counterparty.trim() !== '';
+        const rule: BankRule = {
+          id: 0,
+          name: '',
+          counterparty: byName ? tx!.tx.counterparty.trim() : '',
+          iban: byName ? '' : tx!.tx.counterparty_iban,
+          purpose: '',
+          direction: tx!.tx.amount > 0 ? 'in' : 'out',
+          account: ruleTarget.account,
+          tax_rate: ruleTarget.tax_rate,
+          description: '',
+          active: true,
+          created_at: '',
+        };
+        await api.post('/bank-rules', rule);
+      }
+    },
+    { success: () => (saveRule && ruleTarget ? 'Zuordnung und Regel gespeichert' : 'Zuordnung gespeichert'), onSuccess: onClose },
+  );
   const del = useAction(() => api.del(`/transactions/${tx!.tx.id}`), { success: 'Kontobewegung gelöscht', onSuccess: onClose });
 
   if (!tx) return <Drawer opened={false} onClose={onClose} />;
@@ -579,6 +607,9 @@ function AssignDrawer({ tx, onClose }: { tx: TransactionView | null; onClose: ()
               </Stack>
             )}
           </>
+        )}
+        {ruleTarget && ruleParty && (
+          <Checkbox label={`Künftig automatisch so buchen (Regel für „${ruleParty}“)`} checked={saveRule} onChange={(e) => setSaveRule(e.currentTarget.checked)} />
         )}
         <Divider />
         <Group justify="space-between">

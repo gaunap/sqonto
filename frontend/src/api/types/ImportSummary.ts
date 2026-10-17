@@ -8,4 +8,8 @@ export type ImportSummary = { imported: number, skipped: number,
 /**
  * Not imported because they fall into the festgeschriebenen period.
  */
-locked: number, auto_matched: number, };
+locked: number, auto_matched: number, 
+/**
+ * Booked by a Bankregel.
+ */
+rules_applied: number, };
