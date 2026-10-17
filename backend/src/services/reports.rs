@@ -1341,6 +1341,10 @@ pub fn dashboard(conn: &Connection) -> Result<Dashboard> {
     if crate::services::dunning::base_rate_outdated(&s, t) {
         todos.push(Todo { kind: "base_rate".into(), label: "Basiszinssatz für Verzugszinsen prüfen".into(), count: 1, link: "/einstellungen/mahnwesen".into(), severity: "orange".into() });
     }
+    let changed = ustva_changed_after_filing(conn, t)?;
+    if changed > 0 {
+        todos.push(Todo { kind: "ustva_changed".into(), label: plural(changed, "Voranmeldung nach Übermittlung geändert", "Voranmeldungen nach Übermittlung geändert"), count: changed, link: "/steuern/ustva".into(), severity: "red".into() });
+    }
     let unfiled = unfiled_ustva(conn, t)?;
     if unfiled > 0 {
         todos.push(Todo { kind: "ustva".into(), label: plural(unfiled, "offene Umsatzsteuer-Voranmeldung", "offene Umsatzsteuer-Voranmeldungen"), count: unfiled, link: "/steuern/ustva".into(), severity: "violet".into() });
@@ -1406,6 +1410,20 @@ fn same_day_last_year(t: NaiveDate) -> NaiveDate {
     ymd(y, t.month(), t.day().min(last_day_of_month(y, t.month()).day()))
 }
 
+/// Submitted returns of this and the previous year whose figures changed afterwards – they need a
+/// berichtigte Voranmeldung.
+fn ustva_changed_after_filing(conn: &Connection, t: NaiveDate) -> Result<i64> {
+    let mut changed = 0;
+    for year in [t.year() - 1, t.year()] {
+        for p in ustva_periods(conn, year)? {
+            if p.filing.as_ref().is_some_and(|f| (f.amount - p.zahllast).abs() > Decimal::new(5, 3)) {
+                changed += 1;
+            }
+        }
+    }
+    Ok(changed)
+}
+
 /// Ended Voranmeldungszeiträume of this and the previous year that are not marked as submitted –
 /// the previous year matters in January / February, when its last return is due. Only periods
 /// with actual bookings count (no nagging for months before the company used the software).
@@ -1454,6 +1472,21 @@ mod tests {
         // Dauerfristverlängerung: one month later; 10 January 2026 is a Saturday → Monday.
         assert_eq!(ustva_due(ymd(2025, 11, 30), true), ymd(2026, 1, 12));
         assert_eq!(ustva_due(ymd(2026, 9, 30), false), ymd(2026, 10, 12));
+    }
+
+    #[test]
+    fn changes_after_filing_are_reported() {
+        let conn = db::open_memory();
+        cfg::ensure_seeded(&conn).unwrap();
+        let mut m = ManualEntry { date: ymd(2026, 2, 1), description: "Erlös".into(), debit_account: "1200".into(), credit_account: "8400".into(), amount: dec!(119), tax_key: "UST19".into(), ..Default::default() };
+        let id = db::insert(&conn, &mut m).unwrap();
+        crate::services::posting::rebuild(&conn, crate::services::posting::Source::Manual(id)).unwrap();
+        let mut f = UstvaFiling { year: 2026, period: "Q1".into(), submitted_at: "2026-04-10".into(), amount: dec!(19), ..Default::default() };
+        db::insert(&conn, &mut f).unwrap();
+        assert_eq!(ustva_changed_after_filing(&conn, ymd(2026, 5, 1)).unwrap(), 0);
+        conn.execute("UPDATE manual_entries SET amount = '238'", []).unwrap();
+        crate::services::posting::rebuild(&conn, crate::services::posting::Source::Manual(id)).unwrap();
+        assert_eq!(ustva_changed_after_filing(&conn, ymd(2026, 5, 1)).unwrap(), 1);
     }
 
     #[test]

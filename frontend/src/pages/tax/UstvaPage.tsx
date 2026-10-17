@@ -20,9 +20,12 @@ function KzTag({ kz, strong }: { kz: string; strong?: boolean }) {
   );
 }
 
+/** The figures of a submitted return changed afterwards (berichtigte Voranmeldung needed). */
+const changedSinceFiling = (p: Pick<UstvaPeriod, 'filing' | 'zahllast'>) => !!p.filing && Math.abs(p.filing.amount - p.zahllast) > 0.005;
+
 function PeriodCard({ p, active, onClick }: { p: UstvaPeriod; active: boolean; onClick: () => void }) {
-  const state = p.filing ? 'filed' : p.is_future ? 'future' : p.is_current ? 'current' : 'due';
-  const color = { filed: 'teal', future: 'gray', current: 'blue', due: 'orange' }[state];
+  const state = changedSinceFiling(p) ? 'changed' : p.filing ? 'filed' : p.is_future ? 'future' : p.is_current ? 'current' : 'due';
+  const color = { changed: 'red', filed: 'teal', future: 'gray', current: 'blue', due: 'orange' }[state];
   return (
     <UnstyledButton onClick={onClick}>
       <Paper withBorder p="sm" radius="md" style={{ outline: active ? '2px solid var(--mantine-color-brand-5)' : undefined, opacity: p.is_future ? 0.6 : 1 }}>
@@ -31,7 +34,7 @@ function PeriodCard({ p, active, onClick }: { p: UstvaPeriod; active: boolean; o
             {p.label.replace(/ \d{4}$/, '')}
           </Text>
           <Badge size="xs" color={color} variant="light">
-            {state === 'filed' ? 'gemeldet' : state === 'future' ? 'zukünftig' : state === 'current' ? 'laufend' : 'offen'}
+            {state === 'changed' ? 'geändert' : state === 'filed' ? 'gemeldet' : state === 'future' ? 'zukünftig' : state === 'current' ? 'laufend' : 'offen'}
           </Badge>
         </Group>
         <Text fw={700} className="tabular" c={p.zahllast < 0 ? 'teal.7' : undefined}>
@@ -63,7 +66,23 @@ export function UstvaPage() {
   }, [periods, period]);
 
   const { data: report } = useApi<UstvaReport>(period ? `/reports/ustva/${year}/${period}` : null);
-  const file = useAction(() => api.post(`/reports/ustva/${year}/${period}/filing`, { submitted_at: fileDate, note }), { success: 'Als übermittelt markiert', onSuccess: () => setFileOpen(false) });
+  const lock = useAction((until: string) => api.post('/settings/lock', { until }), { success: (_r, until) => `Festgeschrieben bis einschließlich ${date(until)}` });
+  const file = useAction(() => api.post(`/reports/ustva/${year}/${period}/filing`, { submitted_at: fileDate, note }), {
+    success: 'Als übermittelt markiert',
+    onSuccess: () => {
+      setFileOpen(false);
+      // After submitting, the period should no longer change: offer the Festschreibung.
+      const locked = settings?.tax.locked_until;
+      if (report && report.to <= today() && (!locked || locked < report.to)) {
+        confirmAction({
+          title: 'Zeitraum festschreiben?',
+          message: `Die Voranmeldung für ${report.period_label} ist übermittelt. Soll der Zeitraum bis einschließlich ${date(report.to)} festgeschrieben werden, damit sich die gemeldeten Werte nicht mehr ändern? Eine Festschreibung kann nicht rückgängig gemacht werden.`,
+          confirmLabel: 'Festschreiben',
+          onConfirm: () => lock.mutate(report.to),
+        });
+      }
+    },
+  });
   const unfile = useAction(() => api.del(`/reports/ustva/${year}/${period}/filing`), { success: 'Meldung zurückgesetzt' });
 
   return (
