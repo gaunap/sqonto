@@ -340,29 +340,118 @@ pub async fn zugferd(State(st): State<AppState>, Path(id): Path<i64>) -> Result<
 
 pub async fn xrechnung(State(st): State<AppState>, Path(id): Path<i64>) -> Result<Response, AppError> {
     let doc: Document = st.read(|c| db::get(c, id))?;
-    let name = safe_filename(&format!("XRechnung_{}.xml", doc.number));
-    let issued = archive::is_issued(&doc);
-    let existing = if issued { archived(&st, id, archive::XRECHNUNG)? } else { None };
+    let xml = xrechnung_bytes(&st, &doc)?;
+    let _ = st.write(|c| crate::services::settings::log(c, "document", id, "einvoice", "XRechnung (CII) heruntergeladen"));
+    Ok(file_response(xml, "application/xml", &xrechnung_name(&doc), true))
+}
+
+fn xrechnung_name(doc: &Document) -> String {
+    safe_filename(&format!("XRechnung_{}.xml", doc.number))
+}
+
+/// XRechnung of a document – archived for issued invoices.
+fn xrechnung_bytes(st: &AppState, doc: &Document) -> Result<Vec<u8>, AppError> {
+    let id = doc.id;
+    let name = xrechnung_name(doc);
+    let issued = archive::is_issued(doc);
+    let existing = if issued { archived(st, id, archive::XRECHNUNG)? } else { None };
     let xml = match existing {
         Some((_, bytes)) => bytes,
         None => {
             let xml = st.read(|c| {
-                let check = einvoice::check(c, &doc, true)?;
+                let check = einvoice::check(c, doc, true)?;
                 if !check.errors.is_empty() {
                     return Err(crate::error::UserError(format!("XRechnung nicht möglich: {}", check.errors.join(" "))).into());
                 }
-                einvoice::generate_cii(c, &doc, einvoice::GUIDELINE_XRECHNUNG)
+                einvoice::generate_cii(c, doc, einvoice::GUIDELINE_XRECHNUNG)
             })?;
             if issued {
-                archive_files(&st, id, vec![(vec![archive::XRECHNUNG], name.clone(), "application/xml", xml.into_bytes())])?;
-                archived_required(&st, id, archive::XRECHNUNG)?.1
+                archive_files(st, id, vec![(vec![archive::XRECHNUNG], name.clone(), "application/xml", xml.into_bytes())])?;
+                archived_required(st, id, archive::XRECHNUNG)?.1
             } else {
                 xml.into_bytes()
             }
         }
     };
-    let _ = st.write(|c| crate::services::settings::log(c, "document", id, "einvoice", "XRechnung (CII) heruntergeladen"));
-    Ok(file_response(xml, "application/xml", &name, true))
+    Ok(xml)
+}
+
+/// PDF of a document: archived for issued invoices, rendered for everything else.
+async fn document_pdf(st: &AppState, doc: &Document) -> Result<Vec<u8>, AppError> {
+    if archive::is_issued(doc) {
+        ensure_issued(st, doc).await?;
+        return Ok(archived_required(st, doc.id, archive::PDF)?.1);
+    }
+    let job = st.read(|c| data::document_job(c, &st.data_dir, doc, &docs::lines_of(c, doc.id)?, None))?;
+    render_pdf(st, job, false).await
+}
+
+// ---------------------------------------------------------------- E-Mail
+
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct EmailDraft {
+    pub to: String,
+    pub subject: String,
+    pub body: String,
+    pub attachments: Vec<String>,
+}
+
+#[derive(Deserialize, TS)]
+#[ts(export)]
+pub struct EmailRequest {
+    pub to: String,
+    pub cc: String,
+    pub subject: String,
+    pub body: String,
+}
+
+/// Recipient, texts (from the templates) and attachments for sending a document.
+fn email_draft_of(c: &rusqlite::Connection, doc: &Document) -> anyhow::Result<EmailDraft> {
+    let s = crate::services::settings::load(c)?;
+    let contact = doc.contact_id.and_then(|id| db::find::<crate::models::Contact>(c, id).ok().flatten());
+    let mut vars = docs::placeholders(&s, doc, contact.as_ref());
+    vars.push(("Dokument", docs::type_label(&doc.doc_type, &doc.kind).to_string()));
+    let mut attachments = vec![pdf_name(doc)];
+    if doc.is_invoice_like() && doc.einvoice_format == "xrechnung" {
+        attachments.push(xrechnung_name(doc));
+    }
+    Ok(EmailDraft {
+        to: contact.map(|k| k.email).unwrap_or_default(),
+        subject: crate::util::fill_placeholders(&s.email.subject, &vars),
+        body: crate::util::fill_placeholders(&s.email.body, &vars),
+        attachments,
+    })
+}
+
+pub async fn email_draft(State(st): State<AppState>, Path(id): Path<i64>) -> ApiResult<EmailDraft> {
+    st.read(|c| email_draft_of(c, &db::get(c, id)?)).map(Json)
+}
+
+/// Sends the document as PDF (plus XRechnung where that is its format) and marks it as sent.
+pub async fn send_email(State(st): State<AppState>, Path(id): Path<i64>, Json(r): Json<EmailRequest>) -> ApiResult<DocumentFull> {
+    let (doc, s) = st.read(|c| Ok((db::get::<Document>(c, id)?, crate::services::settings::load(c)?)))?;
+    if doc.status == "draft" {
+        return Err(AppError::bad("Bitte das Dokument zuerst abschließen."));
+    }
+    let mut attachments = vec![(pdf_name(&doc), "application/pdf".to_string(), document_pdf(&st, &doc).await?)];
+    if doc.is_invoice_like() && doc.einvoice_format == "xrechnung" {
+        attachments.push((xrechnung_name(&doc), "application/xml".to_string(), xrechnung_bytes(&st, &doc)?));
+    }
+    let msg = crate::services::email::Outgoing {
+        to: crate::services::email::addresses(&r.to),
+        cc: crate::services::email::addresses(&r.cc),
+        subject: r.subject,
+        body: r.body,
+        attachments,
+    };
+    let to = msg.to.join(", ");
+    tokio::task::spawn_blocking(move || crate::services::email::send(&s.email, &msg)).await.map_err(|e| AppError::from(anyhow::anyhow!(e)))??;
+    st.write(|c| {
+        docs::mark_sent(c, id, &format!("E-Mail an {to}"))?;
+        docs::get_full(c, id)
+    })
+    .map(Json)
 }
 
 #[derive(Deserialize)]

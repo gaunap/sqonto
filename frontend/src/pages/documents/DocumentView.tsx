@@ -20,6 +20,8 @@ import {
   Loader,
   Menu,
   Modal,
+  TextInput,
+  Textarea,
   NumberInput,
   SegmentedControl,
   Stack,
@@ -55,10 +57,12 @@ import {
   IconBellRinging,
   IconFlag,
   IconRepeat,
+  IconPaperclip,
+  IconSend,
 } from '@tabler/icons-react';
 import { api, downloadFile, openFile } from '@/api/client';
 import { notifyError, useAction, useApi, useSettings } from '@/api/hooks';
-import type { DocumentFull, EinvoiceCheck, IdResponse, Pages, RecurringView } from '@/api/types';
+import type { DocumentFull, EinvoiceCheck, EmailDraft, EmailRequest, IdResponse, Pages, RecurringView } from '@/api/types';
 import { PaymentModal } from '@/components/PaymentModal';
 import { PagesPreview } from '@/components/DocumentParts';
 import { CYCLES, RecurringModal } from '@/components/Recurring';
@@ -249,6 +253,49 @@ function EinvoiceMenu({ doc }: { doc: DocumentFull }) {
   );
 }
 
+/** Sends a document from Sqonto (SMTP settings under Einstellungen → E-Mail). */
+function SendEmailModal({ opened, onClose, doc }: { opened: boolean; onClose: () => void; doc: DocumentFull }) {
+  const [mail, setMail] = useState<EmailRequest>({ to: '', cc: '', subject: '', body: '' });
+  const [attachments, setAttachments] = useState<string[]>([]);
+  useEffect(() => {
+    if (!opened) return;
+    api
+      .get<EmailDraft>(`/documents/${doc.doc.id}/email`)
+      .then((d) => {
+        setMail({ to: d.to, cc: '', subject: d.subject, body: d.body });
+        setAttachments(d.attachments);
+      })
+      .catch((e) => notifyError(e));
+  }, [opened, doc.doc.id]);
+  const send = useAction((m: EmailRequest) => api.post(`/documents/${doc.doc.id}/email`, m), { success: 'E-Mail gesendet', onSuccess: onClose, errorTitle: 'E-Mail nicht gesendet' });
+  const set = (p: Partial<EmailRequest>) => setMail((m) => ({ ...m, ...p }));
+  return (
+    <Modal opened={opened} onClose={onClose} size="lg" title={<Text fw={650}>Per E-Mail senden</Text>}>
+      <Stack gap="sm">
+        <TextInput label="An" required value={mail.to} onChange={(e) => set({ to: e.currentTarget.value })} description="Mehrere Adressen mit Komma trennen" inputWrapperOrder={['label', 'input', 'description', 'error']} />
+        <TextInput label="Kopie (CC)" value={mail.cc} onChange={(e) => set({ cc: e.currentTarget.value })} />
+        <TextInput label="Betreff" value={mail.subject} onChange={(e) => set({ subject: e.currentTarget.value })} />
+        <Textarea label="Text" autosize minRows={8} value={mail.body} onChange={(e) => set({ body: e.currentTarget.value })} />
+        <Group gap={6}>
+          {attachments.map((a) => (
+            <Badge key={a} variant="light" color="gray" leftSection={<IconPaperclip size={12} />} tt="none">
+              {a}
+            </Badge>
+          ))}
+        </Group>
+        <Group justify="flex-end">
+          <Button variant="default" onClick={onClose}>
+            Abbrechen
+          </Button>
+          <Button leftSection={<IconSend size={16} />} onClick={() => send.mutate(mail)} loading={send.isPending} disabled={!mail.to.trim()}>
+            Senden
+          </Button>
+        </Group>
+      </Stack>
+    </Modal>
+  );
+}
+
 const ACTIVITY_COLORS: Record<string, string> = {
   created: 'gray',
   finalized: 'brand',
@@ -268,6 +315,8 @@ export function DocumentViewPage() {
   const [partialOpen, setPartialOpen] = useState(false);
   const [dunningOpen, setDunningOpen] = useState(false);
   const [recurringOpen, setRecurringOpen] = useState(false);
+  const [sendOpen, setSendOpen] = useState(false);
+  const { data: settings } = useSettings();
   const { data: recurringList } = useApi<RecurringView[]>('/recurring');
   const recurring = recurringList?.find((r) => r.recurring.template_id === Number(id))?.recurring ?? null;
 
@@ -309,6 +358,10 @@ export function DocumentViewPage() {
   const hasPartials = data.related.some((r) => r.relation === 'partial' && r.status !== 'cancelled' && r.status !== 'draft');
 
   const mail = () => {
+    if (settings?.email.enabled) {
+      setSendOpen(true);
+      return;
+    }
     const to = contact?.email ?? '';
     const subject = `${label} ${doc.number}`;
     const body = `${doc.intro_text.split('\n')[0] || 'Guten Tag,'}\n\nanbei erhalten Sie unsere ${label} ${doc.number} über ${money(doc.gross_total)}.\n\nMit freundlichen Grüßen`;
@@ -736,6 +789,7 @@ export function DocumentViewPage() {
       )}
       {canPartial && <PartialModal opened={partialOpen} onClose={() => setPartialOpen(false)} doc={data} />}
       {isInvoice && <DunningModal opened={dunningOpen} onClose={() => setDunningOpen(false)} doc={data} />}
+      <SendEmailModal opened={sendOpen} onClose={() => setSendOpen(false)} doc={data} />
       {isInvoice && <RecurringModal opened={recurringOpen} onClose={() => setRecurringOpen(false)} templateId={doc.id} templateDate={doc.date} existing={recurring} />}
     </Page>
   );

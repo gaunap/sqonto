@@ -923,6 +923,50 @@ pub struct Settings {
     /// Hides the "Erste Schritte" checklist on the dashboard.
     pub hide_getting_started: bool,
     pub backup: BackupSettings,
+    pub email: EmailSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(default)]
+#[ts(export)]
+pub struct EmailSettings {
+    /// Send documents from Sqonto (otherwise the mail program is opened).
+    pub enabled: bool,
+    pub host: String,
+    pub port: i64,
+    /// starttls | tls | none
+    pub security: String,
+    pub username: String,
+    /// Never sent to the frontend; saving an empty value keeps the stored password.
+    pub password: String,
+    /// Set when reading the settings: a password is stored.
+    pub has_password: bool,
+    pub from_name: String,
+    pub from_address: String,
+    /// Send a blind copy to the sender address.
+    pub bcc_self: bool,
+    /// Templates with the placeholders of the document texts plus {{Dokument}}.
+    pub subject: String,
+    pub body: String,
+}
+
+impl Default for EmailSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            host: String::new(),
+            port: 587,
+            security: "starttls".into(),
+            username: String::new(),
+            password: String::new(),
+            has_password: false,
+            from_name: String::new(),
+            from_address: String::new(),
+            bcc_self: true,
+            subject: "{{Dokument}} {{Nummer}}".into(),
+            body: "{{Anrede}}\n\nanbei erhalten Sie unsere {{Dokument}} {{Nummer}} vom {{Datum}} über {{Betrag}}.\n\nMit freundlichen Grüßen\n{{Firma}}".into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

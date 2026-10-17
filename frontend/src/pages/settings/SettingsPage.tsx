@@ -22,6 +22,7 @@ import {
   Modal,
   NumberInput,
   Paper,
+  PasswordInput,
   Radio,
   SegmentedControl,
   Select,
@@ -52,6 +53,7 @@ import {
   IconHome2,
   IconLayout,
   IconLock,
+  IconMail,
   IconPlus,
   IconReceiptTax,
   IconRefresh,
@@ -729,6 +731,92 @@ function BankRulesCard() {
   );
 }
 
+/** Sending documents via the user's SMTP server. */
+function EmailTab({ s, patch }: { s: Settings; patch: Patch }) {
+  const e = s.email;
+  const set = (p: Partial<Settings['email']>) => patch((x) => ({ ...x, email: { ...x.email, ...p } }));
+  const test = useAction(() => api.post<MessageResponse>('/settings/email-test'), { success: (r) => r.message, invalidate: false, errorTitle: 'Test-E-Mail fehlgeschlagen' });
+  return (
+    <Stack gap="lg" maw={900}>
+      <Card>
+        <Text fw={650} mb={4}>
+          E-Mail-Versand
+        </Text>
+        <Text size="sm" c="dimmed" mb="sm">
+          Dokumente direkt aus Sqonto versenden – mit PDF im Anhang, bei Kunden mit XRechnung zusätzlich mit der XML-Datei. Ohne eigenen Versand öffnet „Senden“ Ihr E-Mail-Programm.
+        </Text>
+        <Switch label="E-Mails über den eigenen E-Mail-Server senden" checked={e.enabled} onChange={(ev) => set({ enabled: ev.currentTarget.checked })} />
+      </Card>
+      <Card>
+        <Text fw={650} mb="sm">
+          Server (SMTP)
+        </Text>
+        <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="sm">
+          <TextInput label="Server" placeholder="smtp.example.org" value={e.host} onChange={(ev) => set({ host: ev.currentTarget.value })} />
+          <Select
+            label="Verschlüsselung"
+            data={[
+              { value: 'starttls', label: 'STARTTLS' },
+              { value: 'tls', label: 'SSL/TLS' },
+              { value: 'none', label: 'keine' },
+            ]}
+            value={e.security}
+            onChange={(v) => set({ security: v ?? 'starttls', port: v === 'tls' ? 465 : v === 'starttls' ? 587 : e.port })}
+          />
+          <NumberInput label="Port" min={1} max={65535} value={e.port} onChange={(v) => set({ port: Number(v) || 587 })} />
+          <TextInput label="Benutzername" value={e.username} onChange={(ev) => set({ username: ev.currentTarget.value })} />
+          <PasswordInput
+            label="Passwort"
+            placeholder={e.has_password ? 'gespeichert' : ''}
+            description={e.has_password ? 'Leer lassen, um das gespeicherte Passwort zu behalten' : undefined}
+            inputWrapperOrder={['label', 'input', 'description', 'error']}
+            value={e.password}
+            onChange={(ev) => set({ password: ev.currentTarget.value })}
+          />
+        </SimpleGrid>
+        <Text size="xs" c="dimmed" mt="xs">
+          Das Passwort wird lokal in der Sqonto-Datenbank gespeichert und ist damit auch in Datensicherungen enthalten.
+        </Text>
+      </Card>
+      <Card>
+        <Text fw={650} mb="sm">
+          Absender
+        </Text>
+        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+          <TextInput label="Name" placeholder={s.company.name} value={e.from_name} onChange={(ev) => set({ from_name: ev.currentTarget.value })} />
+          <TextInput label="E-Mail-Adresse" placeholder={s.company.email} value={e.from_address} onChange={(ev) => set({ from_address: ev.currentTarget.value })} />
+        </SimpleGrid>
+        <Switch mt="sm" label="Kopie an die Absenderadresse senden (BCC)" checked={e.bcc_self} onChange={(ev) => set({ bcc_self: ev.currentTarget.checked })} />
+      </Card>
+      <Card>
+        <Text fw={650} mb="sm">
+          Vorlage
+        </Text>
+        <Stack gap="sm">
+          <TextInput label="Betreff" value={e.subject} onChange={(ev) => set({ subject: ev.currentTarget.value })} />
+          <Textarea
+            label="Text"
+            autosize
+            minRows={6}
+            value={e.body}
+            onChange={(ev) => set({ body: ev.currentTarget.value })}
+            description="Platzhalter: {{Dokument}}, {{Nummer}}, {{Datum}}, {{Betrag}}, {{Fällig am}}, {{Anrede}}, {{Kunde}}, {{Ansprechpartner}}, {{Firma}}"
+            inputWrapperOrder={['label', 'input', 'description', 'error']}
+          />
+        </Stack>
+      </Card>
+      <Group>
+        <Button variant="light" leftSection={<IconMail size={16} />} onClick={() => test.mutate()} loading={test.isPending}>
+          Test-E-Mail senden
+        </Button>
+        <Text size="xs" c="dimmed">
+          Verwendet die gespeicherten Einstellungen und sendet an die Absenderadresse.
+        </Text>
+      </Group>
+    </Stack>
+  );
+}
+
 function AccountsTab() {
   const { data } = usePaymentAccounts();
   const [modal, setModal] = useState<{ open: boolean; account: PaymentAccount | null }>({ open: false, account: null });
@@ -1004,6 +1092,7 @@ const TABS = [
   { value: 'unternehmen', label: 'Unternehmen', icon: IconBuilding, saves: true },
   { value: 'steuern', label: 'Steuern & Buchführung', icon: IconReceiptTax, saves: true },
   { value: 'dokumente', label: 'Dokumente & Texte', icon: IconFileText, saves: true },
+  { value: 'email', label: 'E-Mail', icon: IconMail, saves: true },
   { value: 'layouts', label: 'Layouts', icon: IconLayout, saves: false },
   { value: 'nummern', label: 'Nummernkreise', icon: IconHash, saves: false },
   { value: 'mahnwesen', label: 'Mahnwesen', icon: IconBell, saves: true },
@@ -1060,6 +1149,7 @@ export function SettingsPage() {
           {current.value === 'unternehmen' && <CompanyTab s={s} patch={patch} />}
           {current.value === 'steuern' && <TaxTab s={s} patch={patch} />}
           {current.value === 'dokumente' && <DocsTab s={s} patch={patch} />}
+          {current.value === 'email' && <EmailTab s={s} patch={patch} />}
           {current.value === 'layouts' && <LayoutsTab />}
           {current.value === 'nummern' && <NumbersTab />}
           {current.value === 'mahnwesen' && <DunningTab s={s} patch={patch} />}

@@ -35,6 +35,7 @@ chrono = { version = "0.4.45", features = ["serde"] }
 comemo = "0.5.1"
 csv = "1.4.0"
 encoding_rs = "0.8.42"
+lettre = { version = "0.11.23", default-features = false, features = ["smtp-transport", "builder", "hostname", "rustls-tls"] }
 lopdf = "0.45.0"
 mime_guess = "2.0.5"
 open = "5.4.4"

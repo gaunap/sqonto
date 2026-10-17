@@ -70,7 +70,14 @@ pub async fn status(State(st): State<AppState>) -> ApiResult<SystemStatus> {
 }
 
 pub async fn get_settings(State(st): State<AppState>) -> ApiResult<Settings> {
-    st.read(cfg::load).map(Json)
+    st.read(cfg::load).map(|s| Json(without_password(s)))
+}
+
+/// The SMTP password stays in the backend.
+fn without_password(mut s: Settings) -> Settings {
+    s.email.has_password = !s.email.password.is_empty();
+    s.email.password.clear();
+    s
 }
 
 /// Drops references to files or layouts that no longer exist (e.g. after a reset or restore).
@@ -97,6 +104,12 @@ pub async fn put_settings(State(st): State<AppState>, Json(mut new): Json<Settin
         new.onboarded = old.onboarded || new.onboarded;
         // The locked period only changes through `lock_period`.
         new.tax.locked_until = old.tax.locked_until;
+        if new.email.password.is_empty() {
+            new.email.password = old.email.password.clone();
+        }
+        if new.email.enabled {
+            crate::services::email::check_settings(&new.email)?;
+        }
         sanitize_refs(c, &mut new)?;
         if new.dunning.levels.is_empty() {
             new.dunning.levels = old.dunning.levels.clone();
@@ -113,9 +126,24 @@ pub async fn put_settings(State(st): State<AppState>, Json(mut new): Json<Settin
         if rebuild {
             posting::rebuild_all(c)?;
         }
-        Ok(new)
+        Ok(without_password(new))
     })
     .map(Json)
+}
+
+/// Sends a test message to the sender address with the saved settings.
+pub async fn email_test(State(st): State<AppState>) -> ApiResult<super::MessageResponse> {
+    let s = st.read(cfg::load)?;
+    let to = s.email.from_address.trim().to_string();
+    let msg = crate::services::email::Outgoing {
+        to: vec![to.clone()],
+        cc: vec![],
+        subject: "Sqonto: Test-E-Mail".into(),
+        body: "Diese Nachricht bestätigt, dass Sqonto über Ihren E-Mail-Server senden kann.".into(),
+        attachments: vec![],
+    };
+    tokio::task::spawn_blocking(move || crate::services::email::send(&s.email, &msg)).await.map_err(|e| AppError::from(anyhow::anyhow!(e)))??;
+    Ok(Json(super::MessageResponse { message: format!("Test-E-Mail an {to} gesendet") }))
 }
 
 #[derive(Deserialize, TS)]
@@ -130,7 +158,7 @@ pub async fn put_getting_started(State(st): State<AppState>, Json(input): Json<G
         let mut s = cfg::load(c)?;
         s.hide_getting_started = input.hidden;
         cfg::save(c, &s)?;
-        Ok(s)
+        Ok(without_password(s))
     })
     .map(Json)
 }
@@ -143,7 +171,7 @@ pub struct LockRequest {
 
 /// Festschreibung (GoBD): extends the locked period; it can never be shortened or lifted.
 pub async fn lock_period(State(st): State<AppState>, Json(req): Json<LockRequest>) -> ApiResult<Settings> {
-    st.write(|c| cfg::lock_until(c, req.until)).map(Json)
+    st.write(|c| cfg::lock_until(c, req.until)).map(|s| Json(without_password(s)))
 }
 
 #[derive(Deserialize, TS)]
@@ -169,6 +197,9 @@ pub async fn onboarding(State(st): State<AppState>, Json(input): Json<Onboarding
         }
         s.onboarded = true;
         s.tax.locked_until = current.tax.locked_until;
+        if s.email.password.is_empty() {
+            s.email.password = current.email.password.clone();
+        }
         sanitize_refs(c, &mut s)?;
         if s.dunning.levels.is_empty() {
             s.dunning = DunningSettings::default();

@@ -7,10 +7,11 @@ import type { BackupSettings } from "./BackupSettings";
 import type { CompanySettings } from "./CompanySettings";
 import type { DocSettings } from "./DocSettings";
 import type { DunningSettings } from "./DunningSettings";
+import type { EmailSettings } from "./EmailSettings";
 import type { TaxSettings } from "./TaxSettings";
 
 export type Settings = { onboarded: boolean, company: CompanySettings, tax: TaxSettings, docs: DocSettings, dunning: DunningSettings, 
 /**
  * Hides the "Erste Schritte" checklist on the dashboard.
  */
-hide_getting_started: boolean, backup: BackupSettings, };
+hide_getting_started: boolean, backup: BackupSettings, email: EmailSettings, };
