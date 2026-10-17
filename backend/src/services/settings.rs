@@ -245,6 +245,18 @@ pub fn lock_until(conn: &Connection, until: NaiveDate) -> Result<Settings> {
     Ok(s)
 }
 
+/// Company master data for tests that issue invoices.
+#[cfg(test)]
+pub fn seed_test_company(conn: &Connection) {
+    let mut s = load(conn).unwrap();
+    s.company.name = "Test GmbH".into();
+    s.company.street = "Hauptstraße 1".into();
+    s.company.zip = "10115".into();
+    s.company.city = "Berlin".into();
+    s.company.tax_number = "12/345/67890".into();
+    save(conn, &s).unwrap();
+}
+
 /// Rejects changes to bookings within a locked (festgeschriebenen) period.
 pub fn check_unlocked(conn: &Connection, date: NaiveDate) -> Result<()> {
     let s = load(conn)?;

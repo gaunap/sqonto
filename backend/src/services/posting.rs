@@ -930,6 +930,7 @@ mod tests {
         use crate::services::finance::{self, PaymentRequest};
         let conn = db::open_memory();
         cfg::ensure_seeded(&conn).unwrap();
+        cfg::seed_test_company(&conn);
         let mut s = cfg::load(&conn).unwrap();
         s.tax.bookkeeping = "bilanz".into();
         cfg::save(&conn, &s).unwrap();
@@ -978,12 +979,13 @@ mod tests {
         use crate::services::finance::{self, PaymentRequest};
         let conn = db::open_memory();
         cfg::ensure_seeded(&conn).unwrap();
+        cfg::seed_test_company(&conn);
         let mut s = cfg::load(&conn).unwrap();
         s.tax.bookkeeping = "bilanz".into();
         cfg::save(&conn, &s).unwrap();
         let bank = finance::save_account(&conn, PaymentAccount { name: "Bank".into(), opening_date: ymd(today().year(), 1, 1), ..Default::default() }).unwrap();
         let get = |a: &str| balances(&conn).get(a).copied().unwrap_or_default();
-        let order = Document { doc_type: "order".into(), address: "Kunde GmbH".into(), tax_mode: "standard".into(), ..Default::default() };
+        let order = Document { doc_type: "order".into(), address: "Kunde GmbH\nWeg 1\n12345 Stadt".into(), tax_mode: "standard".into(), ..Default::default() };
         let line = DocumentLine { line_type: "item".into(), name: "Leistung".into(), quantity: dec!(1), unit_price: dec!(1000), tax_rate: dec!(19), ..Default::default() };
         let order = docs::create(&conn, DocumentInput { doc: order, lines: vec![line] }).unwrap();
         docs::finalize(&conn, order).unwrap();

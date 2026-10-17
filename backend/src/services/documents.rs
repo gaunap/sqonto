@@ -556,6 +556,12 @@ pub fn finalize(conn: &Connection, id: i64) -> Result<Document> {
     }
     let t = calc::calculate(&doc, &mut lines);
     calc::apply_totals(&mut doc, &t);
+    if doc.is_invoice_like() {
+        let missing = missing_invoice_data(conn, &s, &doc, &lines)?;
+        if !missing.is_empty() {
+            bail_user!("Für eine ordnungsgemäße Rechnung (§ 14 UStG) fehlt: {}.", missing.join("; "));
+        }
+    }
     doc.number = cfg::next_number(conn, range_key(&doc), doc.date)?;
     doc.status = "open".into();
     doc.finalized_at = now_str();
@@ -578,6 +584,37 @@ pub fn finalize(conn: &Connection, id: i64) -> Result<Document> {
         posting::rebuild(conn, posting::Source::Document(id))?;
     }
     Ok(db::get(conn, id)?)
+}
+
+/// Mandatory information of an invoice (§ 14 Abs. 4 UStG). A Kleinbetragsrechnung up to 250 €
+/// gross needs neither the recipient nor the tax number (§ 33 UStDV).
+pub fn missing_invoice_data(conn: &Connection, s: &Settings, doc: &Document, lines: &[DocumentLine]) -> Result<Vec<String>> {
+    let mut missing = Vec::new();
+    let c = &s.company;
+    if [&c.name, &c.street, &c.zip, &c.city].iter().any(|f| f.trim().is_empty()) {
+        missing.push("Name und Anschrift Ihres Unternehmens (Einstellungen → Unternehmen)".to_string());
+    }
+    if doc.gross_total.abs() > Decimal::from(250) {
+        if c.tax_number.trim().is_empty() && c.vat_id.trim().is_empty() {
+            missing.push("Steuernummer oder USt-IdNr. Ihres Unternehmens (Einstellungen → Unternehmen)".into());
+        }
+        if doc.address.lines().filter(|l| !l.trim().is_empty()).count() < 2 {
+            missing.push("vollständige Anschrift des Empfängers".into());
+        }
+    }
+    if lines.iter().any(|l| l.line_type == "item" && l.name.trim().is_empty() && l.description.trim().is_empty()) {
+        missing.push("Bezeichnung jeder Position".into());
+    }
+    if matches!(doc.tax_mode.as_str(), "eu_delivery" | "eu_service") {
+        let vat_id = match doc.contact_id {
+            Some(id) => db::find::<Contact>(conn, id)?.map(|k| k.vat_id).unwrap_or_default(),
+            None => String::new(),
+        };
+        if vat_id.trim().is_empty() {
+            missing.push("USt-IdNr. des Kunden (innergemeinschaftliche Leistung)".into());
+        }
+    }
+    Ok(missing)
 }
 
 fn check_final_partials(conn: &Connection, doc: &Document, lines: &[DocumentLine]) -> Result<()> {
@@ -987,6 +1024,7 @@ mod tests {
     fn setup() -> (Connection, i64) {
         let conn = db::open_memory();
         cfg::ensure_seeded(&conn).unwrap();
+        cfg::seed_test_company(&conn);
         let bank = finance::save_account(&conn, PaymentAccount { name: "Bank".into(), opening_date: ymd(2020, 1, 1), ..Default::default() }).unwrap();
         (conn, bank)
     }
@@ -997,13 +1035,36 @@ mod tests {
 
     /// Finalized order with one fully paid Abschlag of `percent` %.
     fn order_with_paid_partial(conn: &Connection, bank: i64, percent: Decimal) -> i64 {
-        let doc = Document { doc_type: "order".into(), address: "Kunde GmbH".into(), tax_mode: "standard".into(), ..Default::default() };
+        let doc = Document { doc_type: "order".into(), address: "Kunde GmbH\nWeg 1\n12345 Stadt".into(), tax_mode: "standard".into(), ..Default::default() };
         let order = create(conn, DocumentInput { doc, lines: vec![item(dec!(1000))] }).unwrap();
         finalize(conn, order).unwrap();
         let partial = create_partial(conn, order, PartialRequest { mode: "percent".into(), value: percent }).unwrap();
         let p = finalize(conn, partial).unwrap();
         finance::pay_document(conn, partial, PaymentRequest { account_id: Some(bank), amount: p.gross_total, ..Default::default() }).unwrap();
         order
+    }
+
+    #[test]
+    fn invoices_need_the_mandatory_data() {
+        let conn = db::open_memory();
+        cfg::ensure_seeded(&conn).unwrap();
+        let invoice = |conn: &Connection, address: &str, price: Decimal, name: &str| {
+            let doc = Document { doc_type: "invoice".into(), address: address.into(), tax_mode: "standard".into(), date: ymd(2026, 3, 1), ..Default::default() };
+            let line = DocumentLine { name: name.into(), ..item(price) };
+            create(conn, DocumentInput { doc, lines: vec![line] }).unwrap()
+        };
+        let id = invoice(&conn, "Kunde GmbH", dec!(1000), "Leistung");
+        let err = finalize(&conn, id).unwrap_err().to_string();
+        assert!(err.contains("Anschrift Ihres Unternehmens") && err.contains("Steuernummer") && err.contains("Anschrift des Empfängers"), "{err}");
+        cfg::seed_test_company(&conn);
+        assert!(finalize(&conn, invoice(&conn, "Kunde GmbH\nWeg 1\n12345 Stadt", dec!(1000), "")).unwrap_err().to_string().contains("Bezeichnung"));
+        assert!(finalize(&conn, invoice(&conn, "Kunde GmbH\nWeg 1\n12345 Stadt", dec!(1000), "Leistung")).is_ok());
+        // Kleinbetragsrechnung (≤ 250 € gross): no recipient address and tax number needed.
+        let mut s = cfg::load(&conn).unwrap();
+        s.company.tax_number.clear();
+        s.company.vat_id.clear();
+        cfg::save(&conn, &s).unwrap();
+        assert!(finalize(&conn, invoice(&conn, "Barverkauf", dec!(200), "Leistung")).is_ok());
     }
 
     #[test]
