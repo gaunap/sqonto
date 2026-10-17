@@ -481,6 +481,8 @@ pub async fn activities(State(st): State<AppState>) -> ApiResult<Vec<ActivityIte
                     Some(k) => (k.display_name(), format!("/kontakte/{}", k.id)),
                     None => continue,
                 },
+                // Kassenbuch changes are kept even when the entry itself was deleted.
+                "transaction" => ("Kassenbuch".into(), "/kasse".into()),
                 _ => (a.entity.clone(), String::new()),
             };
             out.push(ActivityItem { activity: a, title, link });

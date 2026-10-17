@@ -367,14 +367,13 @@ pub fn update(conn: &Connection, id: i64, input: TransactionInput) -> Result<()>
     tx.source = old.source.clone();
     tx.reversal_of = old.reversal_of;
     if old.source == "import" || acc.kind == "cash" {
-        // Imported bank data and cash entries are immutable – only the assignment may change.
+        // Imported bank data and cash entries are immutable – only the assignment may change
+        // (cash entries are corrected by a Stornobuchung).
         tx.amount = old.amount;
         tx.date = old.date;
-        if old.source == "import" {
-            tx.counterparty = old.counterparty.clone();
-            tx.counterparty_iban = old.counterparty_iban.clone();
-            tx.purpose = old.purpose.clone();
-        }
+        tx.counterparty = old.counterparty.clone();
+        tx.counterparty_iban = old.counterparty_iban.clone();
+        tx.purpose = old.purpose.clone();
     }
     tx.amount = r2(tx.amount);
     validate_allocations(conn, &tx, &allocations)?;
@@ -401,7 +400,26 @@ pub fn update(conn: &Connection, id: i64, input: TransactionInput) -> Result<()>
     r.dedup();
     refresh_targets(conn, &d, &r)?;
     posting::rebuild(conn, posting::Source::Transaction(id))?;
+    if acc.kind == "cash" {
+        let names = account_names(conn)?;
+        let describe = |allocs: &[Allocation]| -> Result<String> {
+            let parts: Vec<String> = allocs
+                .iter()
+                .map(|a| Ok(format!("{} {}", allocation_label(conn, a, &names)?.0, fmt_money(a.amount.abs()))))
+                .collect::<Result<_>>()?;
+            Ok(if parts.is_empty() { "ohne Zuordnung".into() } else { parts.join(", ") })
+        };
+        let (before, after) = (describe(&old_allocs)?, describe(&db::query::<Allocation>(conn, "WHERE transaction_id = ?1 ORDER BY id", &[v(id)])?)?);
+        if before != after {
+            log_cash(conn, &tx, "changed", &format!("Zuordnung geändert von „{before}“ in „{after}“"))?;
+        }
+    }
     Ok(())
+}
+
+/// Changes to the Kassenbuch stay traceable (GoBD): they are written to the activity log.
+fn log_cash(conn: &Connection, tx: &Transaction, action: &str, message: &str) -> Result<()> {
+    cfg::log(conn, "transaction", tx.id, action, format!("Kassenbuchung Nr. {}: {message}", tx.cash_number.unwrap_or(0)))
 }
 
 pub fn delete(conn: &Connection, id: i64) -> Result<()> {
@@ -413,6 +431,8 @@ pub fn delete(conn: &Connection, id: i64) -> Result<()> {
         if tx.cash_number != Some(last) {
             bail_user!("Kassenbuchungen können nicht gelöscht werden (GoBD). Bitte stattdessen stornieren.");
         }
+        let message = format!("gelöscht ({}, {}, „{}“)", util::fmt_date(tx.date), fmt_money(tx.amount), tx.purpose);
+        log_cash(conn, &tx, "deleted", &message)?;
     }
     let allocs = db::query::<Allocation>(conn, "WHERE transaction_id = ?1", &[v(id)])?;
     conn.execute("DELETE FROM allocations WHERE transaction_id = ?1", [id])?;
@@ -924,5 +944,35 @@ mod tests {
         assert!(save_account(&conn, PaymentAccount { opening_balance: dec!(2000), ..acc.clone() }).is_err(), "opening balance in locked period");
         assert!(save_account(&conn, PaymentAccount { opening_date: ymd(2021, 1, 1), ..acc.clone() }).is_err(), "moving the opening out of the locked period");
         assert!(save_account(&conn, PaymentAccount { iban: "DE02120300000000202051".into(), archived: true, ..acc }).is_ok(), "master data stays editable");
+    }
+
+    #[test]
+    fn cash_entries_change_only_traceably() {
+        let conn = db::open_memory();
+        cfg::ensure_seeded(&conn).unwrap();
+        let cash = save_account(&conn, PaymentAccount { name: "Kasse".into(), kind: "cash".into(), opening_balance: dec!(100), opening_date: ymd(2026, 1, 1), ..Default::default() }).unwrap();
+        let entry = |text: &str| CashEntryInput { account_id: cash, date: Some(ymd(2026, 2, 1)), direction: "out".into(), amount: dec!(11.90), description: text.into(), counter_account: "4930".into(), tax_rate: dec!(19), ..Default::default() };
+        let first = create_cash_entry(&conn, entry("Briefmarken")).unwrap();
+        let second = create_cash_entry(&conn, entry("Kaffee")).unwrap();
+
+        // Changing the text is ignored; changing the category is logged with old and new value.
+        let tx: Transaction = db::get(&conn, first).unwrap();
+        let mut allocs = db::query::<Allocation>(&conn, "WHERE transaction_id = ?1", &[v(first)]).unwrap();
+        allocs[0].account = "4940".into();
+        update(&conn, first, TransactionInput { tx: Transaction { purpose: "Porto".into(), ..tx }, allocations: allocs }).unwrap();
+        assert_eq!(db::get::<Transaction>(&conn, first).unwrap().purpose, "Briefmarken");
+        let log = cfg::activities(&conn, "transaction", first).unwrap();
+        assert_eq!(log.len(), 1);
+        assert!(log[0].message.starts_with("Kassenbuchung Nr. 1: Zuordnung geändert von „4930") && log[0].message.contains("in „4940"), "{}", log[0].message);
+
+        // Saving without changes adds nothing; deleting the last entry is logged.
+        let tx: Transaction = db::get(&conn, first).unwrap();
+        let allocs = db::query::<Allocation>(&conn, "WHERE transaction_id = ?1", &[v(first)]).unwrap();
+        update(&conn, first, TransactionInput { tx, allocations: allocs }).unwrap();
+        assert_eq!(cfg::activities(&conn, "transaction", first).unwrap().len(), 1);
+        assert!(delete(&conn, first).is_err(), "only the last entry can be deleted");
+        delete(&conn, second).unwrap();
+        let log = cfg::activities(&conn, "transaction", second).unwrap();
+        assert_eq!(log[0].message, "Kassenbuchung Nr. 2: gelöscht (01.02.2026, -11,90\u{a0}€, „Kaffee“)");
     }
 }
