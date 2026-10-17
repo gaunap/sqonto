@@ -5,7 +5,8 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use chrono::{Datelike, NaiveDate};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use super::MessageResponse;
 use crate::db;
@@ -16,6 +17,38 @@ use crate::services::reports::{self, JournalRow, Ledger};
 use crate::services::{posting, settings as cfg};
 use crate::state::AppState;
 use crate::util::{now_str, r2, today, ymd};
+
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct MappingOption {
+    pub value: String,
+    pub label: String,
+}
+
+/// Report lines an account can be assigned to (EÜR, GuV, BWA, Bilanz).
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct AccountMappings {
+    pub euer_income: Vec<MappingOption>,
+    pub euer_expense: Vec<MappingOption>,
+    pub guv: Vec<MappingOption>,
+    pub bwa: Vec<MappingOption>,
+    pub bilanz_aktiva: Vec<MappingOption>,
+    pub bilanz_passiva: Vec<MappingOption>,
+}
+
+pub async fn account_mappings() -> axum::Json<AccountMappings> {
+    use crate::chart::*;
+    let opts = |lines: &[(&str, &str)]| -> Vec<MappingOption> { lines.iter().map(|(value, label)| MappingOption { value: value.to_string(), label: label.to_string() }).collect() };
+    Json(AccountMappings {
+        euer_income: opts(EUER_INCOME),
+        euer_expense: opts(&[EUER_EXPENSE, &[EUER_NABZ]].concat()),
+        guv: opts(GUV_LINES),
+        bwa: opts(BWA_LINES),
+        bilanz_aktiva: opts(BILANZ_AKTIVA),
+        bilanz_passiva: opts(BILANZ_PASSIVA),
+    })
+}
 
 pub async fn accounts(State(st): State<AppState>) -> ApiResult<Vec<Account>> {
     st.read(cfg::accounts).map(Json)

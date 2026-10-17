@@ -15,7 +15,7 @@ use rust_decimal::Decimal;
 use serde::Serialize;
 use ts_rs::TS;
 
-use crate::chart::{BILANZ_AKTIVA, BILANZ_PASSIVA, BWA_LINES, EUER_EXPENSE, EUER_INCOME, GUV_LINES};
+use crate::chart::{BILANZ_AKTIVA, BILANZ_PASSIVA, BWA_LINES, EUER_EXPENSE, EUER_INCOME, EUER_NABZ, GUV_LINES};
 use crate::db::{self, v};
 use crate::models::*;
 use crate::services::documents::{self, DocumentFilter, DocumentListItem};
@@ -193,7 +193,7 @@ pub fn euer(conn: &Connection, year: i32) -> Result<Statement> {
     let prev = saldo_by_account(&raw_lines(conn, Some(pf), Some(pt))?);
     let income = grouped_rows(EUER_INCOME, &accounts, &saldo, &prev, |a| a.euer.as_str(), Decimal::NEGATIVE_ONE);
     let expense = grouped_rows(EUER_EXPENSE, &accounts, &saldo, &prev, |a| a.euer.as_str(), Decimal::ONE);
-    let nabz = grouped_rows(&[("nabz", "Nicht abziehbare Betriebsausgaben (nachrichtlich)")], &accounts, &saldo, &prev, |a| a.euer.as_str(), Decimal::ONE);
+    let nabz = grouped_rows(&[EUER_NABZ], &accounts, &saldo, &prev, |a| a.euer.as_str(), Decimal::ONE);
     let ti: Decimal = income.iter().map(|r| r.amount).sum();
     let te: Decimal = expense.iter().map(|r| r.amount).sum();
     let pti: Decimal = income.iter().map(|r| r.prev).sum();

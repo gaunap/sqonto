@@ -292,6 +292,9 @@ pub const EUER_EXPENSE: &[(&str, &str)] = &[
     ("ba_sonst", "Übrige unbeschränkt abziehbare Betriebsausgaben"),
 ];
 
+/// Shown in the EÜR for information only; not part of the result.
+pub const EUER_NABZ: (&str, &str) = ("nabz", "Nicht abziehbare Betriebsausgaben (nachrichtlich)");
+
 pub const GUV_LINES: &[(&str, &str)] = &[
     ("g01", "1. Umsatzerlöse"),
     ("g04", "4. Sonstige betriebliche Erträge"),

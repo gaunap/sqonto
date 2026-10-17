@@ -100,6 +100,7 @@ pub fn router(state: AppState) -> Router {
         .route("/cashbook/{id}/reverse", post(finance::reverse_cash_entry))
         // Buchhaltung
         .route("/accounts", get(accounting::accounts).post(accounting::save_account))
+        .route("/accounts/mappings", get(accounting::account_mappings))
         .route("/accounts/{id}", put(accounting::save_account))
         .route("/journal", get(accounting::journal))
         .route("/ledger/{number}", get(accounting::ledger))

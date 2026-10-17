@@ -7,90 +7,11 @@ import { useNavigate } from 'react-router';
 import { ActionIcon, Badge, Button, Card, Group, Modal, Select, SimpleGrid, Stack, Switch, Text, TextInput, Textarea, Tooltip } from '@mantine/core';
 import { IconEdit, IconPlus, IconSearch } from '@tabler/icons-react';
 import { api } from '@/api/client';
-import { useAction, useChart, useStatus } from '@/api/hooks';
-import type { Account } from '@/api/types';
+import { useAction, useApi, useChart, useStatus } from '@/api/hooks';
+import type { Account, AccountMappings } from '@/api/types';
 import { ListTable } from '@/components/ListTable';
 import { Page, PageHeader } from '@/components/ui';
 import { ACCOUNT_KINDS } from '@/lib/labels';
-
-const EUER_OPTIONS = [
-  ['', '– nicht EÜR-relevant –'],
-  ['be_ust', 'BE: Umsatzsteuerpflichtige Betriebseinnahmen'],
-  ['be_frei', 'BE: Umsatzsteuerfreie Betriebseinnahmen'],
-  ['be_anlagen', 'BE: Veräußerung von Anlagevermögen'],
-  ['ba_waren', 'BA: Waren, Roh- und Hilfsstoffe'],
-  ['ba_fremd', 'BA: Fremdleistungen'],
-  ['ba_personal', 'BA: Personal'],
-  ['ba_raum', 'BA: Raumkosten'],
-  ['ba_telekom', 'BA: Telekommunikation'],
-  ['ba_reise', 'BA: Reisekosten'],
-  ['ba_fortbildung', 'BA: Fortbildung'],
-  ['ba_beratung', 'BA: Rechts- und Steuerberatung'],
-  ['ba_miete_bew', 'BA: Miete/Leasing bewegliche WG'],
-  ['ba_versicherung', 'BA: Beiträge, Versicherungen'],
-  ['ba_werbung', 'BA: Werbekosten'],
-  ['ba_kfz', 'BA: Kfz-Kosten'],
-  ['ba_bewirtung', 'BA: Bewirtung'],
-  ['ba_sonst', 'BA: Übrige Betriebsausgaben'],
-  ['nabz', 'Nicht abziehbar'],
-].map(([value, label]) => ({ value, label }));
-
-const GUV_OPTIONS = [
-  ['', '–'],
-  ['g01', '1. Umsatzerlöse'],
-  ['g04', '4. Sonstige betriebliche Erträge'],
-  ['g05a', '5a. Material/Waren'],
-  ['g05b', '5b. Bezogene Leistungen'],
-  ['g06a', '6a. Löhne und Gehälter'],
-  ['g07', '7. Abschreibungen'],
-  ['g08', '8. Sonstige betriebliche Aufwendungen'],
-  ['g11', '11. Zinserträge'],
-  ['g13', '13. Zinsaufwendungen'],
-  ['g16', '16. Sonstige Steuern'],
-].map(([value, label]) => ({ value, label }));
-
-const BWA_OPTIONS = [
-  ['umsatz', 'Umsatzerlöse'],
-  ['sonst_erloese', 'Sonstige betriebliche Erlöse'],
-  ['material', 'Material- / Wareneinkauf'],
-  ['fremd', 'Fremdleistungen'],
-  ['personal', 'Personalkosten'],
-  ['raum', 'Raumkosten'],
-  ['steuern_betr', 'Betriebliche Steuern'],
-  ['versich', 'Versicherungen / Beiträge'],
-  ['kfz', 'Kfz-Kosten'],
-  ['werbe_reise', 'Werbe- / Reisekosten'],
-  ['afa', 'Abschreibungen'],
-  ['reparatur', 'Reparatur / Instandhaltung'],
-  ['sonstige', 'Sonstige Kosten'],
-  ['zinsaufw', 'Zinsaufwand'],
-  ['neutral_aufw', 'Sonstiger neutraler Aufwand'],
-  ['zinsertr', 'Zinserträge'],
-  ['neutral_ertr', 'Sonstiger neutraler Ertrag'],
-  ['steuern_ee', 'Steuern Einkommen und Ertrag'],
-].map(([value, label]) => ({ value, label }));
-
-const BILANZ_OPTIONS = [
-  { group: 'Aktiva', items: [
-    ['a_immat', 'A. I. Immaterielle Vermögensgegenstände'],
-    ['a_sach', 'A. II. Sachanlagen'],
-    ['a_finanz', 'A. III. Finanzanlagen'],
-    ['a_vorraete', 'B. I. Vorräte'],
-    ['a_ford', 'B. II. 1. Forderungen aus L+L'],
-    ['a_sonst_vg', 'B. II. 4. Sonstige Vermögensgegenstände'],
-    ['a_liquide', 'B. IV. Kasse, Bank'],
-    ['a_rap', 'C. Rechnungsabgrenzungsposten'],
-  ] },
-  { group: 'Passiva', items: [
-    ['p_ek', 'A. Eigenkapital'],
-    ['p_rueck', 'B. Rückstellungen'],
-    ['p_vb_kredit', 'C. 2. Verbindlichkeiten ggü. Kreditinstituten'],
-    ['p_anz', 'C. 3. Erhaltene Anzahlungen'],
-    ['p_vb_ll', 'C. 4. Verbindlichkeiten aus L+L'],
-    ['p_vb_sonst', 'C. 8. Sonstige Verbindlichkeiten'],
-    ['p_rap', 'D. Rechnungsabgrenzungsposten'],
-  ] },
-].map((g) => ({ group: g.group, items: g.items.map(([value, label]) => ({ value, label })) }));
 
 const TAX_RATE_OPTIONS = [
   { value: '', label: 'keine Vorgabe' },
@@ -133,6 +54,16 @@ function AccountModal({ opened, onClose, account }: { opened: boolean; onClose: 
       active: true,
     };
   const set = (p: Partial<Account>) => setA({ ...current, ...p });
+  // Report lines come from the backend, so every mapping it knows can be selected.
+  const { data: maps } = useApi<AccountMappings>(opened ? '/accounts/mappings' : null);
+  const euerData = [
+    { group: 'Betriebseinnahmen', items: maps?.euer_income ?? [] },
+    { group: 'Betriebsausgaben', items: maps?.euer_expense ?? [] },
+  ];
+  const bilanzData = [
+    { group: 'Aktiva', items: maps?.bilanz_aktiva ?? [] },
+    { group: 'Passiva', items: maps?.bilanz_passiva ?? [] },
+  ];
   const save = useAction((x: Account) => (x.id ? api.put(`/accounts/${x.id}`, x) : api.post('/accounts', x)), {
     success: 'Konto gespeichert',
     onSuccess: () => {
@@ -163,9 +94,9 @@ function AccountModal({ opened, onClose, account }: { opened: boolean; onClose: 
         <TextInput label="Bezeichnung" value={current.name} onChange={(e) => set({ name: e.currentTarget.value })} />
         {(current.kind === 'expense' || current.kind === 'revenue') && (
           <SimpleGrid cols={2} spacing="sm">
-            <Select label="EÜR-Zuordnung" data={EUER_OPTIONS} value={current.euer} onChange={(v) => set({ euer: v ?? '' })} disabled={current.system} />
-            <Select label="GuV-Position" data={GUV_OPTIONS} value={current.guv} onChange={(v) => set({ guv: v ?? '' })} disabled={current.system} />
-            <Select label="BWA-Zeile" data={BWA_OPTIONS} value={current.bwa || null} onChange={(v) => set({ bwa: v ?? '' })} disabled={current.system} placeholder="automatisch" clearable />
+            <Select label="EÜR-Zuordnung" data={euerData} value={current.euer || null} onChange={(v) => set({ euer: v ?? '' })} disabled={current.system} placeholder="nicht EÜR-relevant" clearable searchable />
+            <Select label="GuV-Position" data={maps?.guv ?? []} value={current.guv || null} onChange={(v) => set({ guv: v ?? '' })} disabled={current.system} placeholder="–" clearable searchable />
+            <Select label="BWA-Zeile" data={maps?.bwa ?? []} value={current.bwa || null} onChange={(v) => set({ bwa: v ?? '' })} disabled={current.system} placeholder="automatisch" clearable />
             <Select
               label="Steuersatz-Vorschlag"
 
@@ -178,7 +109,7 @@ function AccountModal({ opened, onClose, account }: { opened: boolean; onClose: 
         )}
         {['asset', 'current', 'liability', 'equity', 'private'].includes(current.kind) && (
           <SimpleGrid cols={2} spacing="sm">
-            <Select label="Bilanzposition" data={BILANZ_OPTIONS} value={current.bilanz || null} onChange={(v) => set({ bilanz: v ?? '' })} disabled={current.system} placeholder="–" clearable />
+            <Select label="Bilanzposition" data={bilanzData} value={current.bilanz || null} onChange={(v) => set({ bilanz: v ?? '' })} disabled={current.system} placeholder="–" clearable />
             {current.kind === 'asset' && (
               <Select label="Steuersatz-Vorschlag" data={TAX_RATE_OPTIONS} value={current.tax_rate == null ? '' : String(current.tax_rate)} onChange={(v) => set({ tax_rate: v ? Number(v) : null })} disabled={current.system} />
             )}
