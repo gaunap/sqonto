@@ -675,7 +675,7 @@ function DataTab() {
           <Button leftSection={<IconArchive size={16} />} onClick={() => downloadFile('/system/backup').catch((e) => notifyError(e))}>
             Sicherung herunterladen
           </Button>
-          <FileButton onChange={(f) => f && confirmAction({ title: 'Sicherung wiederherstellen', message: 'Alle aktuellen Daten werden durch die Sicherung ersetzt.', danger: true, confirmLabel: 'Wiederherstellen', onConfirm: () => restore(f) })} accept=".zip,application/zip">
+          <FileButton onChange={(f) => f && confirmAction({ title: 'Sicherung wiederherstellen', message: 'Alle aktuellen Daten werden durch die Sicherung ersetzt. Der bisherige Stand wird vorher im Datenordner unter „backups“ gesichert.', danger: true, confirmLabel: 'Wiederherstellen', onConfirm: () => restore(f) })} accept=".zip,application/zip">
             {(props) => (
               <Button {...props} variant="default" leftSection={<IconUpload size={16} />} loading={restoring}>
                 Sicherung wiederherstellen

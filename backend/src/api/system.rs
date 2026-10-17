@@ -236,6 +236,13 @@ pub async fn rebuild(State(st): State<AppState>) -> ApiResult<super::MessageResp
 }
 
 pub async fn backup(State(st): State<AppState>) -> Result<Response, AppError> {
+    let zip = backup_zip(&st)?;
+    let name = format!("Sqonto-Datensicherung-{}.zip", chrono::Local::now().format("%Y-%m-%d_%H%M"));
+    Ok(file_response(zip, "application/zip", &name, true))
+}
+
+/// ZIP with a consistent copy of the database and all stored files.
+fn backup_zip(st: &AppState) -> Result<Vec<u8>, AppError> {
     let tmp = st.data_dir.join(format!("backup-{}.db", uuid::Uuid::new_v4()));
     {
         let conn = st.db();
@@ -259,8 +266,30 @@ pub async fn backup(State(st): State<AppState>) -> Result<Response, AppError> {
         }
         zip.finish().map_err(AppError::from)?;
     }
-    let name = format!("Sqonto-Datensicherung-{}.zip", chrono::Local::now().format("%Y-%m-%d_%H%M"));
-    Ok(file_response(buf.into_inner(), "application/zip", &name, true))
+    Ok(buf.into_inner())
+}
+
+/// Name of a stored file inside a backup (`files/<uuid>`). Stored files are always named by their
+/// UUID, so anything else – paths, drive letters, device names – is rejected.
+fn restore_file_name(entry: &str) -> Option<&str> {
+    let name = entry.strip_prefix("files/")?;
+    (name.len() == 36 && uuid::Uuid::try_parse(name).is_ok()).then_some(name)
+}
+
+/// Checks a restored database before it replaces the current one.
+fn validate_backup_db(path: &std::path::Path) -> anyhow::Result<()> {
+    let conn = rusqlite::Connection::open(path)?;
+    let check: String = conn.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
+    if check != "ok" {
+        anyhow::bail!("Integritätsprüfung: {check}");
+    }
+    for table in ["meta", "accounts", "documents", "journal_entries"] {
+        conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1", [table], |r| r.get::<_, i64>(0))
+            .ok()
+            .filter(|n| *n == 1)
+            .ok_or_else(|| anyhow::anyhow!("Tabelle {table} fehlt"))?;
+    }
+    Ok(())
 }
 
 pub async fn restore(State(st): State<AppState>, mut mp: Multipart) -> ApiResult<SystemStatus> {
@@ -282,34 +311,96 @@ pub async fn restore(State(st): State<AppState>, mut mp: Multipart) -> ApiResult
     if !db_bytes.starts_with(b"SQLite format 3") {
         return Err(AppError::bad("Die Datenbank in der Sicherung ist beschädigt."));
     }
-    let db_path = st.data_dir.join("sqonto.db");
-    {
-        let mut guard = st.db();
-        *guard = rusqlite::Connection::open_in_memory().map_err(AppError::from)?;
-        for suffix in ["-wal", "-shm"] {
-            let _ = std::fs::remove_file(st.data_dir.join(format!("sqonto.db{suffix}")));
-        }
-        std::fs::write(&db_path, &db_bytes).map_err(AppError::from)?;
-        let files_dir = st.files_dir();
-        let _ = std::fs::remove_dir_all(&files_dir);
-        std::fs::create_dir_all(&files_dir).map_err(AppError::from)?;
-        for i in 0..archive.len() {
-            let mut f = archive.by_index(i).map_err(AppError::from)?;
-            let name = f.name().map(|n| n.to_string()).unwrap_or_default();
-            if let Some(rest) = name.strip_prefix("files/")
-                && !rest.is_empty()
-                && !rest.contains("..")
-                && !rest.contains('/')
-            {
-                let mut data = Vec::new();
-                f.read_to_end(&mut data).map_err(AppError::from)?;
-                std::fs::write(files_dir.join(rest), data).map_err(AppError::from)?;
-            }
-        }
-        *guard = db::open(&db_path).map_err(AppError::from)?;
-        cfg::ensure_seeded(&guard).map_err(AppError::from)?;
+    // Database and files are staged next to the current data; nothing is replaced before both
+    // are complete and the database has been checked.
+    let staged_db = st.data_dir.join("sqonto.db.restore");
+    let staged_files = st.data_dir.join("files.restore");
+    let cleanup = || {
+        let _ = std::fs::remove_file(&staged_db);
+        let _ = std::fs::remove_dir_all(&staged_files);
+    };
+    cleanup();
+    if let Err(e) = stage_restore(&mut archive, &db_bytes, &staged_db, &staged_files) {
+        cleanup();
+        return Err(AppError::from(e));
     }
+    // The current state is kept in data/backups in case the wrong backup was chosen.
+    let safety_dir = st.data_dir.join("backups");
+    let stamp = chrono::Local::now().format("%Y-%m-%d_%H%M%S").to_string();
+    let safety = (1..)
+        .map(|n| safety_dir.join(if n == 1 { format!("Sqonto-vor-Wiederherstellung-{stamp}.zip") } else { format!("Sqonto-vor-Wiederherstellung-{stamp}-{n}.zip") }))
+        .find(|p| !p.exists())
+        .unwrap_or_default();
+    let saved = std::fs::create_dir_all(&safety_dir).map_err(AppError::from).and_then(|_| backup_zip(&st)).and_then(|z| std::fs::write(&safety, z).map_err(AppError::from));
+    if let Err(e) = saved {
+        cleanup();
+        return Err(AppError::bad(format!("Der aktuelle Datenstand konnte nicht gesichert werden, die Wiederherstellung wurde abgebrochen: {}", e.message)));
+    }
+    swap_in_restore(&st, &staged_db, &staged_files).map_err(|e| {
+        cleanup();
+        AppError::from(anyhow::anyhow!("Wiederherstellung fehlgeschlagen ({e:#}). Der vorherige Datenstand liegt in {}.", safety.display()))
+    })?;
+    tracing::info!("Datensicherung wiederhergestellt, vorheriger Stand: {}", safety.display());
     status(State(st)).await
+}
+
+/// Writes the backup's database and stored files to the staging locations and checks them.
+fn stage_restore(archive: &mut zip::ZipArchive<std::io::Cursor<Vec<u8>>>, db_bytes: &[u8], staged_db: &std::path::Path, staged_files: &std::path::Path) -> anyhow::Result<()> {
+    std::fs::write(staged_db, db_bytes)?;
+    validate_backup_db(staged_db).map_err(|e| crate::error::UserError(format!("Die Datenbank in der Sicherung ist beschädigt ({e}).")))?;
+    std::fs::create_dir_all(staged_files)?;
+    for i in 0..archive.len() {
+        let mut f = archive.by_index(i)?;
+        let entry = f.name().map(|n| n.to_string()).unwrap_or_default();
+        if !entry.starts_with("files/") || entry.ends_with('/') {
+            continue;
+        }
+        let Some(name) = restore_file_name(&entry) else {
+            tracing::warn!("Wiederherstellung: Eintrag {entry:?} übersprungen");
+            continue;
+        };
+        let mut data = Vec::new();
+        f.read_to_end(&mut data)?;
+        std::fs::write(staged_files.join(name), data)?;
+    }
+    Ok(())
+}
+
+/// Replaces database and files by the staged ones; on failure the previous state is put back.
+fn swap_in_restore(st: &AppState, staged_db: &std::path::Path, staged_files: &std::path::Path) -> anyhow::Result<()> {
+    let db_path = st.data_dir.join("sqonto.db");
+    let files_dir = st.files_dir();
+    let previous_files = st.data_dir.join("files.previous");
+    let _ = std::fs::remove_dir_all(&previous_files);
+    if files_dir.exists() {
+        std::fs::rename(&files_dir, &previous_files)?;
+    }
+    let put_back_files = || {
+        let _ = std::fs::remove_dir_all(&files_dir);
+        let _ = std::fs::rename(&previous_files, &files_dir);
+    };
+    if let Err(e) = std::fs::rename(staged_files, &files_dir) {
+        put_back_files();
+        return Err(e.into());
+    }
+    let mut guard = st.db();
+    *guard = rusqlite::Connection::open_in_memory()?;
+    for suffix in ["-wal", "-shm"] {
+        let _ = std::fs::remove_file(st.data_dir.join(format!("sqonto.db{suffix}")));
+    }
+    let opened = std::fs::rename(staged_db, &db_path).map_err(anyhow::Error::from).and_then(|_| db::open(&db_path));
+    match opened {
+        Ok(conn) => *guard = conn,
+        Err(e) => {
+            put_back_files();
+            *guard = db::open(&db_path)?;
+            return Err(e);
+        }
+    }
+    cfg::ensure_seeded(&guard)?;
+    drop(guard);
+    let _ = std::fs::remove_dir_all(&previous_files);
+    Ok(())
 }
 
 #[derive(Deserialize, TS)]
@@ -459,6 +550,24 @@ mod tests {
         sandbox_upload(&mut resp, mime);
         let get = |n: header::HeaderName| resp.headers().get(n).map(|v| v.to_str().unwrap().to_string());
         (get(header::X_CONTENT_TYPE_OPTIONS), get(header::CONTENT_SECURITY_POLICY))
+    }
+
+    #[test]
+    fn restore_accepts_only_stored_file_names() {
+        let id = "0b9c3a52-6a3e-4a8e-9a4f-2f2b7c1d9e10";
+        assert_eq!(restore_file_name(&format!("files/{id}")), Some(id));
+        for bad in [
+            "files/",
+            "files/../sqonto.db",
+            "files/..\\..\\evil.exe",
+            "files/C:\\Windows\\evil.dll",
+            "files/sub/0b9c3a52-6a3e-4a8e-9a4f-2f2b7c1d9e10",
+            "files/CON",
+            "files/0b9c3a526a3e4a8e9a4f2f2b7c1d9e10",
+            "sqonto.db",
+        ] {
+            assert_eq!(restore_file_name(bad), None, "{bad}");
+        }
     }
 
     #[test]
