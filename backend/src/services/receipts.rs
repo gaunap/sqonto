@@ -209,7 +209,37 @@ fn validate(conn: &Connection, r: &Receipt, lines: &[ReceiptLine]) -> Result<()>
             bail_user!("Bitte für jede Position einen Betrag angeben.");
         }
     }
+    if let Some(other) = duplicate_of(conn, r)? {
+        bail_user!(
+            "Die Rechnung {} von {} ist bereits als Beleg {} vom {} erfasst.",
+            r.invoice_number.trim(),
+            party_name(conn, r)?,
+            other.number,
+            crate::util::fmt_date(other.date)
+        );
+    }
     Ok(())
+}
+
+/// Another receipt of the same business partner with the same invoice number (ignoring case,
+/// spaces and punctuation) – the same supplier invoice entered twice would double the Vorsteuer.
+pub fn duplicate_of(conn: &Connection, r: &Receipt) -> Result<Option<Receipt>> {
+    let norm = |s: &str| s.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect::<String>();
+    let number = norm(&r.invoice_number);
+    if number.is_empty() {
+        return Ok(None);
+    }
+    let party = norm(&party_name(conn, r)?);
+    for other in db::query::<Receipt>(conn, "WHERE id != ?1 AND invoice_number != ''", &[v(r.id)])? {
+        let same_party = match (r.contact_id, other.contact_id) {
+            (Some(a), Some(b)) if a == b => true,
+            _ => !party.is_empty() && norm(&party_name(conn, &other)?) == party,
+        };
+        if same_party && norm(&other.invoice_number) == number {
+            return Ok(Some(other));
+        }
+    }
+    Ok(None)
 }
 
 pub fn recompute_paid(conn: &Connection, id: i64) -> Result<()> {
@@ -383,6 +413,25 @@ mod tests {
         let receipt = Receipt { supplier_name: "Lieferant GmbH".into(), receipt_type: "expense".into(), date: ymd(2026, 3, 1), prices_gross: false, ..Default::default() };
         let lines = vec![ReceiptLine { account: "4930".into(), net, tax_rate: dec!(19), ..Default::default() }];
         create(conn, ReceiptInput { receipt, lines, payment: None }).unwrap()
+    }
+
+    #[test]
+    fn same_supplier_invoice_cannot_be_entered_twice() {
+        let (conn, _) = setup();
+        let save = |supplier: &str, invoice: &str| {
+            let receipt = Receipt { supplier_name: supplier.into(), invoice_number: invoice.into(), receipt_type: "expense".into(), date: ymd(2026, 3, 1), prices_gross: true, ..Default::default() };
+            let lines = vec![ReceiptLine { account: "4930".into(), gross: dec!(119), tax_rate: dec!(19), ..Default::default() }];
+            create(&conn, ReceiptInput { receipt, lines, payment: None })
+        };
+        let first = save("Lieferant GmbH", "R-2026/001").unwrap();
+        let err = save("lieferant gmbh", "r 2026 001").unwrap_err().to_string();
+        assert!(err.contains("bereits als Beleg BE-"), "{err}");
+        assert!(save("Anderer Lieferant", "R-2026/001").is_ok(), "same number from another supplier");
+        assert!(save("Lieferant GmbH", "").is_ok(), "receipts without invoice number");
+        assert!(save("Lieferant GmbH", "").is_ok());
+        // Saving the receipt itself again is no duplicate.
+        let full = get_full(&conn, first).unwrap();
+        update(&conn, first, ReceiptInput { receipt: full.receipt, lines: full.lines, payment: None }).unwrap();
     }
 
     #[test]

@@ -870,6 +870,9 @@ pub fn to_receipt(conn: &Connection, inv: &ParsedInvoice, source: &str) -> Resul
     if matched.is_none() {
         warnings.push(format!("Lieferant „{}“ ist noch nicht als Kontakt angelegt.", inv.seller.name));
     }
+    if let Some(other) = crate::services::receipts::duplicate_of(conn, &receipt)? {
+        warnings.push(format!("Diese Rechnung ist bereits als Beleg {} vom {} erfasst.", other.number, util::fmt_date(other.date)));
+    }
     if inv.currency != "EUR" && !inv.currency.is_empty() {
         warnings.push(format!("Rechnungswährung {} – Beträge bitte in EUR umrechnen.", inv.currency));
     }
