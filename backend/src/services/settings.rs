@@ -16,8 +16,61 @@ use crate::{bail_user, chart};
 
 pub fn load(conn: &Connection) -> Result<Settings> {
     match db::meta_get(conn, "settings")? {
-        Some(s) => Ok(serde_json::from_str(&s).unwrap_or_default()),
+        Some(raw) => match serde_json::from_str(&raw) {
+            Ok(s) => Ok(s),
+            Err(e) => recover(conn, &raw, &e),
+        },
         None => Ok(Settings::default()),
+    }
+}
+
+/// Settings that no longer parse as a whole (e.g. after a field changed its type) are not thrown
+/// away: every value that still fits is kept and only the broken ones fall back to their
+/// defaults – a Festschreibung or the onboarding state must not get lost. The original JSON stays
+/// in `meta` for manual recovery.
+fn recover(conn: &Connection, raw: &str, err: &serde_json::Error) -> Result<Settings> {
+    db::meta_set(conn, &format!("settings_unreadable_{}", now_str()), raw)?;
+    let stored: serde_json::Value = serde_json::from_str(raw).unwrap_or(serde_json::Value::Null);
+    let mut merged = serde_json::to_value(Settings::default())?;
+    let mut lost = Vec::new();
+    merge_valid(&mut merged, "", &stored, &mut lost);
+    let s: Settings = serde_json::from_value(merged)?;
+    save(conn, &s)?;
+    tracing::warn!("Einstellungen nicht vollständig lesbar ({err}); auf Standard gesetzt: {}", lost.join(", "));
+    Ok(s)
+}
+
+/// Puts `value` at the JSON pointer `path` of `merged` if the settings stay valid; otherwise
+/// tries the members of an object one by one. Values that do not fit are listed in `lost`.
+fn merge_valid(merged: &mut serde_json::Value, path: &str, value: &serde_json::Value, lost: &mut Vec<String>) {
+    let mut trial = merged.clone();
+    if set_pointer(&mut trial, path, value.clone()) && serde_json::from_value::<Settings>(trial.clone()).is_ok() {
+        *merged = trial;
+        return;
+    }
+    match value {
+        serde_json::Value::Object(map) => {
+            for (k, v) in map {
+                merge_valid(merged, &format!("{path}/{}", k.replace('~', "~0").replace('/', "~1")), v, lost);
+            }
+        }
+        _ => lost.push(path.to_string()),
+    }
+}
+
+fn set_pointer(doc: &mut serde_json::Value, path: &str, value: serde_json::Value) -> bool {
+    if let Some(slot) = doc.pointer_mut(path) {
+        *slot = value;
+        return true;
+    }
+    // A key missing in the defaults (map entries): add it to its parent object.
+    let Some((parent, key)) = path.rsplit_once('/') else { return false };
+    match doc.pointer_mut(parent) {
+        Some(serde_json::Value::Object(map)) => {
+            map.insert(key.replace("~1", "/").replace("~0", "~"), value);
+            true
+        }
+        _ => false,
     }
 }
 
@@ -192,6 +245,24 @@ pub fn check_unlocked(conn: &Connection, date: NaiveDate) -> Result<()> {
 mod tests {
     use super::*;
     use crate::util::ymd;
+
+    #[test]
+    fn unreadable_settings_keep_what_still_fits() {
+        let conn = db::open_memory();
+        let raw = r#"{"onboarded":true,"company":{"name":"Lichtwerk","city":"Köln"},"tax":{"bookkeeping":"bilanz","locked_until":"2020-12-31","ustva_period":5},"docs":{"payment_terms_days":"vierzehn","texts":{"invoice":{"title":"Rechnung"}}},"hide_getting_started":"ja"}"#;
+        db::meta_set(&conn, "settings", raw).unwrap();
+        let s = load(&conn).unwrap();
+        assert!(s.onboarded);
+        assert_eq!((s.company.name.as_str(), s.company.city.as_str()), ("Lichtwerk", "Köln"));
+        assert_eq!((s.tax.bookkeeping.as_str(), s.tax.locked_until), ("bilanz", Some(ymd(2020, 12, 31))));
+        let d = Settings::default();
+        assert_eq!((s.tax.ustva_period.clone(), s.docs.payment_terms_days, s.hide_getting_started), (d.tax.ustva_period, d.docs.payment_terms_days, d.hide_getting_started));
+        assert_eq!(s.docs.texts.get("invoice").map(|t| t.title.as_str()), Some("Rechnung"));
+        // The repaired settings are stored, the original is kept for manual recovery.
+        assert!(serde_json::from_str::<Settings>(&db::meta_get(&conn, "settings").unwrap().unwrap()).is_ok());
+        let kept: i64 = conn.query_row("SELECT COUNT(*) FROM meta WHERE key LIKE 'settings_unreadable_%' AND value = ?1", [raw], |r| r.get(0)).unwrap();
+        assert_eq!(kept, 1);
+    }
 
     #[test]
     fn lock_only_moves_forward() {
