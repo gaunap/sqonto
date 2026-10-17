@@ -357,17 +357,27 @@ export function DocumentViewPage() {
   const hasFinal = data.related.some((r) => r.relation === 'final' && r.status !== 'cancelled');
   const hasPartials = data.related.some((r) => r.relation === 'partial' && r.status !== 'cancelled' && r.status !== 'draft');
 
-  const mail = () => {
+  const mail = async () => {
     if (settings?.email.enabled) {
       setSendOpen(true);
       return;
     }
-    const to = contact?.email ?? '';
-    const subject = `${label} ${doc.number}`;
-    const body = `${doc.intro_text.split('\n')[0] || 'Guten Tag,'}\n\nanbei erhalten Sie unsere ${label} ${doc.number} über ${money(doc.gross_total)}.\n\nMit freundlichen Grüßen`;
-    downloadFile(`/documents/${id}/pdf`).catch((e) => notifyError(e));
-    window.location.href = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    sent.mutate('E-Mail');
+    // Without SMTP: save the attachments, open the mail program with the template text and only
+    // mark the document as sent once the user confirms it.
+    try {
+      const d = await api.get<EmailDraft>(`/documents/${id}/email`);
+      await downloadFile(`/documents/${id}/pdf`);
+      if (isInvoiceLike && doc.einvoice_format === 'xrechnung') await downloadFile(`/documents/${id}/xrechnung`);
+      window.location.href = `mailto:${encodeURIComponent(d.to)}?subject=${encodeURIComponent(d.subject)}&body=${encodeURIComponent(d.body)}`;
+      confirmAction({
+        title: 'E-Mail versendet?',
+        message: `Bitte ${d.attachments.join(' und ')} in der E-Mail anhängen. Wurde die E-Mail an ${d.to || 'den Empfänger'} gesendet? Dann wird ${label} ${doc.number} als versendet markiert.`,
+        confirmLabel: 'Als versendet markieren',
+        onConfirm: () => sent.mutate('E-Mail'),
+      });
+    } catch (e) {
+      notifyError(e);
+    }
   };
 
   return (
