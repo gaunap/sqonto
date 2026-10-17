@@ -154,12 +154,16 @@ pub fn next_number(conn: &Connection, key: &str, date: NaiveDate) -> Result<Stri
     let mut r = db::query_one::<NumberRange>(conn, "WHERE key = ?1", &[db::v(key.to_string())])?
         .ok_or_else(|| anyhow::anyhow!("Nummernkreis {key} fehlt"))?;
     let year = i64::from(date.year());
-    if r.reset_yearly && r.year != year {
-        // Start a new year; never go backwards when documents are created for an older year.
-        if r.year < year {
-            r.year = year;
-            r.next = 1;
-        }
+    if r.reset_yearly && r.year > year {
+        // A document dated in an earlier year continues that year's sequence after its highest
+        // number; the counter of the current year stays untouched.
+        let used = numbers_in_use(conn, key)?;
+        let highest = (1..=used.len() as i64 + r.next + 10_000).filter(|n| used.contains(&format_number(&r.format, *n, date))).max().unwrap_or(0);
+        return Ok(format_number(&r.format, highest + 1, date));
+    }
+    if r.reset_yearly && r.year < year {
+        r.year = year;
+        r.next = 1;
     }
     let mut n = r.next;
     // Guard against duplicates (e.g. after manual edits of the range).
@@ -174,18 +178,28 @@ pub fn next_number(conn: &Connection, key: &str, date: NaiveDate) -> Result<Stri
     }
 }
 
+/// Table holding the numbers of a number range.
+fn number_table(key: &str) -> Option<&'static str> {
+    Some(match key {
+        "invoice" | "credit_note" | "cancellation" | "quote" | "order" | "delivery" => "documents",
+        "receipt" => "receipts",
+        "customer" | "supplier" => "contacts",
+        "article" => "articles",
+        "asset" => "assets",
+        _ => return None,
+    })
+}
+
 fn number_in_use(conn: &Connection, key: &str, number: &str) -> Result<bool> {
-    let sql = match key {
-        "invoice" | "credit_note" | "cancellation" | "quote" | "order" | "delivery" => {
-            "SELECT COUNT(*) FROM documents WHERE number = ?1"
-        }
-        "receipt" => "SELECT COUNT(*) FROM receipts WHERE number = ?1",
-        "customer" | "supplier" => "SELECT COUNT(*) FROM contacts WHERE number = ?1",
-        "article" => "SELECT COUNT(*) FROM articles WHERE number = ?1",
-        "asset" => "SELECT COUNT(*) FROM assets WHERE number = ?1",
-        _ => return Ok(false),
-    };
-    Ok(db::scalar_i64(conn, sql, &[db::v(number.to_string())])? > 0)
+    let Some(table) = number_table(key) else { return Ok(false) };
+    Ok(db::scalar_i64(conn, &format!("SELECT COUNT(*) FROM {table} WHERE number = ?1"), &[db::v(number.to_string())])? > 0)
+}
+
+fn numbers_in_use(conn: &Connection, key: &str) -> Result<std::collections::HashSet<String>> {
+    let Some(table) = number_table(key) else { return Ok(Default::default()) };
+    let mut stmt = conn.prepare(&format!("SELECT number FROM {table} WHERE number != ''"))?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
 /// Activity log ---------------------------------------------------------------
@@ -282,6 +296,26 @@ mod tests {
         assert!(check_unlocked(&conn, first).is_err());
         assert!(check_unlocked(&conn, first + chrono::Duration::days(1)).is_ok());
         assert_eq!(lock_until(&conn, t).unwrap().tax.locked_until, Some(t));
+    }
+
+    #[test]
+    fn back_dated_documents_continue_their_years_sequence() {
+        let conn = db::open_memory();
+        ensure_seeded(&conn).unwrap();
+        conn.execute("UPDATE number_ranges SET format = 'RE-{YYYY}-{NNNN}', reset_yearly = 1, year = 2025, next = 1 WHERE key = 'invoice'", []).unwrap();
+        let issue = |date: NaiveDate| {
+            let n = next_number(&conn, "invoice", date).unwrap();
+            conn.execute("INSERT INTO documents (doc_type, number, date) VALUES ('invoice', ?1, ?2)", [&n, &date.to_string()]).unwrap();
+            n
+        };
+        for _ in 0..3 {
+            issue(ymd(2025, 12, 1));
+        }
+        assert_eq!(issue(ymd(2026, 1, 5)), "RE-2026-0001");
+        assert_eq!(issue(ymd(2026, 1, 6)), "RE-2026-0002");
+        // A late invoice for December continues 2025 without touching the 2026 counter.
+        assert_eq!(issue(ymd(2025, 12, 31)), "RE-2025-0004");
+        assert_eq!(issue(ymd(2026, 1, 7)), "RE-2026-0003");
     }
 
     #[test]
