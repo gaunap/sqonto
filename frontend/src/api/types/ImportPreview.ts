@@ -6,4 +6,4 @@
 import type { CsvMapping } from "./CsvMapping";
 import type { ImportedTx } from "./ImportedTx";
 
-export type ImportPreview = { format: string, columns: Array<string>, sample: Array<Array<string>>, mapping: CsvMapping | null, transactions: Array<ImportedTx>, duplicates: number, errors: Array<string>, };
+export type ImportPreview = { format: string, columns: Array<string>, sample: Array<Array<string>>, mapping: CsvMapping | null, transactions: Array<ImportedTx>, duplicates: number, locked: number, errors: Array<string>, };

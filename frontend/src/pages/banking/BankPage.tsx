@@ -298,6 +298,11 @@ function ImportModal({ opened, onClose, accounts, defaultAccount }: { opened: bo
                 {preview.duplicates} bereits vorhanden
               </Badge>
             )}
+            {preview.locked > 0 && (
+              <Badge size="lg" variant="light" color="orange">
+                {preview.locked} im festgeschriebenen Zeitraum
+              </Badge>
+            )}
           </Group>
           <Box mah={340} style={{ overflowY: 'auto' }}>
             <Table striped fz="sm" stickyHeader>
@@ -311,7 +316,7 @@ function ImportModal({ opened, onClose, accounts, defaultAccount }: { opened: bo
               </Table.Thead>
               <Table.Tbody>
                 {preview.transactions.map((t, i) => (
-                  <Table.Tr key={i} style={{ opacity: t.duplicate ? 0.45 : 1 }}>
+                  <Table.Tr key={i} style={{ opacity: t.duplicate || t.locked ? 0.45 : 1 }}>
                     <Table.Td>{date(t.date)}</Table.Td>
                     <Table.Td>{t.counterparty}</Table.Td>
                     <Table.Td>
@@ -332,8 +337,8 @@ function ImportModal({ opened, onClose, accounts, defaultAccount }: { opened: bo
             <Button variant="default" onClick={() => setStep(0)}>
               Zurück
             </Button>
-            <Button onClick={() => doImport.mutate()} loading={doImport.isPending} disabled={preview.transactions.filter((t) => !t.duplicate).length === 0} leftSection={<IconFileImport size={16} />}>
-              {preview.transactions.filter((t) => !t.duplicate).length} Umsätze importieren
+            <Button onClick={() => doImport.mutate()} loading={doImport.isPending} disabled={preview.transactions.filter((t) => !t.duplicate && !t.locked).length === 0} leftSection={<IconFileImport size={16} />}>
+              {preview.transactions.filter((t) => !t.duplicate && !t.locked).length} Umsätze importieren
             </Button>
           </Group>
         </Stack>
@@ -346,6 +351,7 @@ function ImportModal({ opened, onClose, accounts, defaultAccount }: { opened: bo
           <Text fw={650}>{summary.imported} Umsätze importiert</Text>
           <Text size="sm" c="dimmed">
             {summary.auto_matched} automatisch zugeordnet · {summary.skipped} Duplikate übersprungen
+            {summary.locked > 0 && ` · ${summary.locked} im festgeschriebenen Zeitraum nicht importiert`}
           </Text>
           <Button onClick={onClose}>Schließen</Button>
         </Stack>

@@ -46,6 +46,9 @@ pub struct ImportedTx {
     pub purpose: String,
     pub hash: String,
     pub duplicate: bool,
+    /// Dated within the festgeschriebenen period – cannot be imported.
+    #[serde(default)]
+    pub locked: bool,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -57,6 +60,7 @@ pub struct ImportPreview {
     pub mapping: Option<CsvMapping>,
     pub transactions: Vec<ImportedTx>,
     pub duplicates: i64,
+    pub locked: i64,
     pub errors: Vec<String>,
 }
 
@@ -96,11 +100,27 @@ pub fn parse_date(s: &str) -> Option<NaiveDate> {
     s.get(..10).and_then(|x| NaiveDate::parse_from_str(x, "%Y-%m-%d").ok())
 }
 
-fn hash(account_id: i64, t: &ImportedTx) -> String {
+fn hash(account_id: i64, t: &ImportedTx, occurrence: usize) -> String {
+    let mut key = format!("{account_id}|{}|{}|{}|{}|{}", t.date, t.amount.normalize(), t.counterparty.trim(), t.iban.trim(), t.purpose.trim());
+    if occurrence > 0 {
+        key.push_str(&format!("|{occurrence}"));
+    }
     let mut h = Sha256::new();
-    h.update(format!("{account_id}|{}|{}|{}|{}|{}", t.date, t.amount.normalize(), t.counterparty.trim(), t.iban.trim(), t.purpose.trim()));
+    h.update(key);
     let out = h.finalize();
     out.iter().take(12).map(|b| format!("{b:02x}")).collect()
+}
+
+/// Identical movements on the same day (e.g. two equal card payments) are told apart by their
+/// order in the file. The first one keeps the plain hash, so earlier imports are still recognised.
+fn assign_hashes(account_id: i64, txs: &mut [ImportedTx]) {
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for t in txs.iter_mut() {
+        let plain = hash(account_id, t, 0);
+        let n = seen.entry(plain.clone()).or_default();
+        t.hash = if *n == 0 { plain } else { hash(account_id, t, *n) };
+        *n += 1;
+    }
 }
 
 fn find_col(headers: &[String], patterns: &[&str]) -> i64 {
@@ -211,6 +231,7 @@ fn parse_csv(text: &str, mapping: Option<CsvMapping>) -> ImportPreview {
                     purpose: cell(row, m.purpose_col),
                     hash: String::new(),
                     duplicate: false,
+                    locked: false,
                 });
             }
             (cols, sample)
@@ -220,7 +241,7 @@ fn parse_csv(text: &str, mapping: Option<CsvMapping>) -> ImportPreview {
             (rows.first().cloned().unwrap_or_default(), rows.iter().skip(1).take(5).cloned().collect())
         }
     };
-    ImportPreview { format: "csv".into(), columns, sample, mapping, transactions, duplicates: 0, errors }
+    ImportPreview { format: "csv".into(), columns, sample, mapping, transactions, duplicates: 0, locked: 0, errors }
 }
 
 fn by_name<'a, 'i>(n: roxmltree::Node<'a, 'i>, name: &str) -> Option<roxmltree::Node<'a, 'i>> {
@@ -271,25 +292,24 @@ fn parse_camt(xml: &str) -> Result<ImportPreview> {
             purpose: purpose.join(" "),
             hash: String::new(),
             duplicate: false,
+            locked: false,
         });
     }
-    Ok(ImportPreview { format: "camt".into(), columns: vec![], sample: vec![], mapping: None, transactions, duplicates: 0, errors: vec![] })
+    Ok(ImportPreview { format: "camt".into(), columns: vec![], sample: vec![], mapping: None, transactions, duplicates: 0, locked: 0, errors: vec![] })
 }
 
 pub fn preview(conn: &Connection, account_id: i64, bytes: &[u8], mapping: Option<CsvMapping>) -> Result<ImportPreview> {
     let _acc: PaymentAccount = db::get(conn, account_id)?;
     let text = decode(bytes);
     let mut p = if text.trim_start().starts_with('<') { parse_camt(&text)? } else { parse_csv(&text, mapping) };
-    let mut dups = 0;
+    assign_hashes(account_id, &mut p.transactions);
+    let locked_until = crate::services::settings::load(conn)?.tax.locked_until;
     for t in p.transactions.iter_mut() {
-        t.hash = hash(account_id, t);
-        let exists = db::scalar_i64(conn, "SELECT COUNT(*) FROM transactions WHERE account_id = ?1 AND import_hash = ?2", &[v(account_id), v(t.hash.clone())])? > 0;
-        t.duplicate = exists;
-        if exists {
-            dups += 1;
-        }
+        t.duplicate = db::scalar_i64(conn, "SELECT COUNT(*) FROM transactions WHERE account_id = ?1 AND import_hash = ?2", &[v(account_id), v(t.hash.clone())])? > 0;
+        t.locked = locked_until.is_some_and(|l| t.date <= l);
     }
-    p.duplicates = dups;
+    p.duplicates = p.transactions.iter().filter(|t| t.duplicate).count() as i64;
+    p.locked = p.transactions.iter().filter(|t| t.locked && !t.duplicate).count() as i64;
     Ok(p)
 }
 
@@ -298,19 +318,29 @@ pub fn preview(conn: &Connection, account_id: i64, bytes: &[u8], mapping: Option
 pub struct ImportSummary {
     pub imported: i64,
     pub skipped: i64,
+    /// Not imported because they fall into the festgeschriebenen period.
+    pub locked: i64,
     pub auto_matched: i64,
 }
 
-pub fn import(conn: &Connection, account_id: i64, txs: Vec<ImportedTx>, auto_match: bool) -> Result<ImportSummary> {
+pub fn import(conn: &Connection, account_id: i64, mut txs: Vec<ImportedTx>, auto_match: bool) -> Result<ImportSummary> {
     let acc: PaymentAccount = db::get(conn, account_id)?;
     if acc.kind == "cash" {
         bail_user!("In ein Kassenkonto können keine Bankumsätze importiert werden.");
     }
-    let (mut imported, mut skipped, mut matched) = (0, 0, 0);
+    if txs.iter().any(|t| t.hash.is_empty()) {
+        assign_hashes(account_id, &mut txs);
+    }
+    let locked_until = crate::services::settings::load(conn)?.tax.locked_until;
+    let (mut imported, mut skipped, mut locked, mut matched) = (0, 0, 0, 0);
     for t in txs {
-        let h = if t.hash.is_empty() { hash(account_id, &t) } else { t.hash.clone() };
+        let h = t.hash.clone();
         if db::scalar_i64(conn, "SELECT COUNT(*) FROM transactions WHERE account_id = ?1 AND import_hash = ?2", &[v(account_id), v(h.clone())])? > 0 {
             skipped += 1;
+            continue;
+        }
+        if locked_until.is_some_and(|l| t.date <= l) {
+            locked += 1;
             continue;
         }
         let tx = Transaction {
@@ -349,7 +379,7 @@ pub fn import(conn: &Connection, account_id: i64, txs: Vec<ImportedTx>, auto_mat
             }
         }
     }
-    Ok(ImportSummary { imported, skipped, auto_matched: matched })
+    Ok(ImportSummary { imported, skipped, locked, auto_matched: matched })
 }
 
 #[cfg(test)]
@@ -364,6 +394,48 @@ mod tests {
         assert_eq!(parse_amount("1,234.56"), Some(dec!(1234.56)));
         assert_eq!(parse_amount("99.9"), Some(dec!(99.9)));
         assert_eq!(parse_amount("12,00-"), Some(dec!(-12.00)));
+    }
+
+    fn setup() -> (Connection, i64) {
+        let conn = db::open_memory();
+        crate::services::settings::ensure_seeded(&conn).unwrap();
+        let acc = finance::save_account(&conn, PaymentAccount { name: "Bank".into(), opening_date: crate::util::ymd(2020, 1, 1), ..Default::default() }).unwrap();
+        (conn, acc)
+    }
+
+    const TWO_COFFEES: &str = "Buchungstag;Name Zahlungsbeteiligter;Verwendungszweck;Betrag\n\
+        03.02.2021;Café Bohne;Kartenzahlung;-4,90\n\
+        03.02.2021;Café Bohne;Kartenzahlung;-4,90\n\
+        04.02.2021;Kunde AG;RE-1;119,00\n";
+
+    #[test]
+    fn identical_movements_are_both_imported() {
+        let (conn, acc) = setup();
+        let p = preview(&conn, acc, TWO_COFFEES.as_bytes(), None).unwrap();
+        assert_eq!(p.transactions.len(), 3);
+        assert_ne!(p.transactions[0].hash, p.transactions[1].hash);
+        // The first of identical rows keeps the hash used by earlier versions.
+        let mut plain = Sha256::new();
+        plain.update(format!("{acc}|2021-02-03|-4.9|Café Bohne||Kartenzahlung"));
+        let plain: String = plain.finalize().iter().take(12).map(|b| format!("{b:02x}")).collect();
+        assert_eq!(p.transactions[0].hash, plain);
+        assert_eq!(p.duplicates, 0);
+
+        let s = import(&conn, acc, p.transactions, false).unwrap();
+        assert_eq!((s.imported, s.skipped), (3, 0));
+        let again = preview(&conn, acc, TWO_COFFEES.as_bytes(), None).unwrap();
+        assert_eq!(again.duplicates, 3, "re-importing the same file adds nothing");
+        assert_eq!(import(&conn, acc, again.transactions, false).unwrap().imported, 0);
+    }
+
+    #[test]
+    fn rows_in_locked_period_are_skipped() {
+        let (conn, acc) = setup();
+        crate::services::settings::lock_until(&conn, crate::util::ymd(2021, 2, 3)).unwrap();
+        let p = preview(&conn, acc, TWO_COFFEES.as_bytes(), None).unwrap();
+        assert_eq!((p.locked, p.transactions.iter().filter(|t| t.locked).count()), (2, 2));
+        let s = import(&conn, acc, p.transactions, false).unwrap();
+        assert_eq!((s.imported, s.locked), (1, 2), "import continues after locked rows");
     }
 
     #[test]
