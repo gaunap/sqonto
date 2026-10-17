@@ -17,8 +17,16 @@ use rust_decimal::Decimal;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+/// The current schema; fresh databases are created from it directly.
 const SCHEMA: &str = include_str!("schema.sql");
-const SCHEMA_VERSION: i64 = 1;
+
+/// Changes to existing tables since schema version 1, in order: entry `n` (1-based) brings a
+/// database from version `n` to `n + 1`. New tables only need `schema.sql`
+/// (`CREATE TABLE IF NOT EXISTS`); new columns and data fixes need an entry here **and** the
+/// final definition in `schema.sql`.
+const MIGRATIONS: &[&str] = &[];
+
+pub const SCHEMA_VERSION: i64 = 1 + MIGRATIONS.len() as i64;
 
 pub fn open(path: &Path) -> Result<Connection> {
     let conn = Connection::open(path).with_context(|| format!("Datenbank {path:?} konnte nicht geöffnet werden"))?;
@@ -39,16 +47,50 @@ pub fn open_memory() -> Connection {
 }
 
 fn migrate(conn: &Connection) -> Result<()> {
-    conn.execute_batch(SCHEMA)?;
-    let version: Option<String> = conn
-        .query_row("SELECT value FROM meta WHERE key = 'schema_version'", [], |r| r.get(0))
-        .ok();
-    if version.is_none() {
-        conn.execute(
-            "INSERT INTO meta (key, value) VALUES ('schema_version', ?1)",
-            [SCHEMA_VERSION.to_string()],
-        )?;
+    migrate_with(conn, SCHEMA, MIGRATIONS)
+}
+
+/// Schema version stored in a database; None for a new, empty database.
+pub fn schema_version(conn: &Connection) -> Option<i64> {
+    let v: String = conn.query_row("SELECT value FROM meta WHERE key = 'schema_version'", [], |r| r.get(0)).ok()?;
+    v.parse().ok()
+}
+
+fn migrate_with(conn: &Connection, schema: &str, migrations: &[&str]) -> Result<()> {
+    let latest = 1 + migrations.len() as i64;
+    let has_meta = conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'meta'", [], |r| r.get::<_, i64>(0))? > 0;
+    let version = match schema_version(conn) {
+        Some(v) => v,
+        // Databases from before the version was stored are version 1.
+        None if has_meta => 1,
+        None => {
+            conn.execute_batch(schema)?;
+            set_schema_version(conn, latest)?;
+            return Ok(());
+        }
+    };
+    if version > latest {
+        anyhow::bail!(
+            "Die Datenbank stammt aus einer neueren Sqonto-Version (Schema {version}, unterstützt bis {latest}). Bitte Sqonto aktualisieren."
+        );
     }
+    for (i, sql) in migrations.iter().enumerate().skip((version - 1) as usize) {
+        let to = i as i64 + 2;
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(sql).with_context(|| format!("Datenbank-Migration auf Schema {to} fehlgeschlagen"))?;
+        set_schema_version(&tx, to)?;
+        tx.commit()?;
+        tracing::info!("Datenbank auf Schema {to} aktualisiert");
+    }
+    conn.execute_batch(schema)?;
+    set_schema_version(conn, latest)
+}
+
+fn set_schema_version(conn: &Connection, version: i64) -> Result<()> {
+    conn.execute(
+        "INSERT INTO meta (key, value) VALUES ('schema_version', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [version.to_string()],
+    )?;
     Ok(())
 }
 
@@ -356,4 +398,53 @@ pub fn meta_set(conn: &Connection, key: &str, value: &str) -> Result<()> {
         [key, value],
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const OLD: &str = "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);\n\
+                       CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, name TEXT NOT NULL);";
+    const NEW: &str = "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);\n\
+                       CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, name TEXT NOT NULL, note TEXT NOT NULL DEFAULT '');\n\
+                       CREATE TABLE IF NOT EXISTS tags (id INTEGER PRIMARY KEY);";
+    const STEPS: &[&str] = &["ALTER TABLE items ADD COLUMN note TEXT NOT NULL DEFAULT '';", "UPDATE items SET note = 'migriert';"];
+
+    #[test]
+    fn current_schema_is_created_fresh() {
+        let conn = open_memory();
+        assert_eq!(schema_version(&conn), Some(SCHEMA_VERSION));
+    }
+
+    #[test]
+    fn older_databases_are_migrated_in_order() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_with(&conn, OLD, &[]).unwrap();
+        conn.execute("INSERT INTO items (name) VALUES ('alt')", []).unwrap();
+        migrate_with(&conn, NEW, STEPS).unwrap();
+        assert_eq!(schema_version(&conn), Some(3));
+        let note: String = conn.query_row("SELECT note FROM items", [], |r| r.get(0)).unwrap();
+        assert_eq!(note, "migriert");
+        conn.execute("INSERT INTO tags DEFAULT VALUES", []).unwrap();
+        // Running again changes nothing.
+        migrate_with(&conn, NEW, STEPS).unwrap();
+        assert_eq!(schema_version(&conn), Some(3));
+    }
+
+    #[test]
+    fn newer_databases_are_refused() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_with(&conn, NEW, STEPS).unwrap();
+        let err = migrate_with(&conn, OLD, &[]).unwrap_err().to_string();
+        assert!(err.contains("neueren Sqonto-Version"), "{err}");
+    }
+
+    #[test]
+    fn failed_migration_keeps_the_previous_version() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_with(&conn, OLD, &[]).unwrap();
+        assert!(migrate_with(&conn, NEW, &["ALTER TABLE items ADD COLUMN note TEXT;", "SELECT * FROM fehlt;"]).is_err());
+        assert_eq!(schema_version(&conn), Some(2), "first step committed, second rolled back");
+    }
 }

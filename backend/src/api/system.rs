@@ -292,6 +292,11 @@ fn validate_backup_db(path: &std::path::Path) -> anyhow::Result<()> {
             .filter(|n| *n == 1)
             .ok_or_else(|| anyhow::anyhow!("Tabelle {table} fehlt"))?;
     }
+    if let Some(v) = db::schema_version(&conn)
+        && v > db::SCHEMA_VERSION
+    {
+        anyhow::bail!("Sicherung einer neueren Sqonto-Version (Schema {v}) – bitte zuerst Sqonto aktualisieren");
+    }
     Ok(())
 }
 
