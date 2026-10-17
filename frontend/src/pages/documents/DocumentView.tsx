@@ -357,6 +357,22 @@ export function DocumentViewPage() {
   const hasFinal = data.related.some((r) => r.relation === 'final' && r.status !== 'cancelled');
   const hasPartials = data.related.some((r) => r.relation === 'partial' && r.status !== 'cancelled' && r.status !== 'draft');
 
+  // Converting twice is usually a mistake, e.g. a quote that was already invoiced.
+  const convertTo = (target: DocType) => {
+    const existing = data.related.filter((r) => r.relation === 'derived' && r.doc_type === target && r.status !== 'cancelled');
+    if (existing.length === 0) {
+      convert.mutate(target);
+      return;
+    }
+    const names = existing.map((r) => `${docLabel(r.doc_type, r.kind)} ${r.number || `(Entwurf vom ${date(r.date)})`}`).join(', ');
+    confirmAction({
+      title: 'Bereits umgewandelt',
+      message: `Aus diesem Dokument wurde bereits erstellt: ${names}. Trotzdem erneut umwandeln?`,
+      confirmLabel: 'Erneut umwandeln',
+      onConfirm: () => convert.mutate(target),
+    });
+  };
+
   const mail = async () => {
     if (settings?.email.enabled) {
       setSendOpen(true);
@@ -414,17 +430,17 @@ export function DocumentViewPage() {
                 </Menu.Target>
                 <Menu.Dropdown>
                 {doc.doc_type === 'quote' && (
-                  <Menu.Item leftSection={<IconClipboardCheck size={16} />} onClick={() => convert.mutate('order')}>
+                  <Menu.Item leftSection={<IconClipboardCheck size={16} />} onClick={() => convertTo('order')}>
                     In Auftragsbestätigung umwandeln
                   </Menu.Item>
                 )}
                 {doc.doc_type !== 'delivery' && (
-                  <Menu.Item leftSection={<IconTruckDelivery size={16} />} onClick={() => convert.mutate('delivery')}>
+                  <Menu.Item leftSection={<IconTruckDelivery size={16} />} onClick={() => convertTo('delivery')}>
                     Lieferschein erstellen
                   </Menu.Item>
                 )}
                 {!hasPartials && !hasFinal && (
-                  <Menu.Item leftSection={<IconFileInvoice size={16} />} onClick={() => convert.mutate('invoice')}>
+                  <Menu.Item leftSection={<IconFileInvoice size={16} />} onClick={() => convertTo('invoice')}>
                     In Rechnung umwandeln
                   </Menu.Item>
                 )}
