@@ -251,12 +251,29 @@ fn by_name<'a, 'i>(n: roxmltree::Node<'a, 'i>, name: &str) -> Option<roxmltree::
 fn parse_camt(xml: &str) -> Result<ImportPreview> {
     let doc = roxmltree::Document::parse(xml)?;
     let mut transactions = Vec::new();
+    let mut errors = Vec::new();
+    let mut pending = 0;
     for ntry in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "Ntry") {
-        let amount = by_name(ntry, "Amt").and_then(|a| a.text()).and_then(|t| Decimal::from_str(t.trim()).ok()).unwrap_or_default();
-        let credit = by_name(ntry, "CdtDbtInd").and_then(|a| a.text()).map(|t| t.trim() == "CRDT").unwrap_or(true);
-        let date_node = ntry.children().find(|c| c.tag_name().name() == "BookgDt").or_else(|| ntry.children().find(|c| c.tag_name().name() == "ValDt"));
+        let child = |name: &str| ntry.children().find(|c| c.is_element() && c.tag_name().name() == name);
+        // Only booked entries: pending ones (camt.052) come again once they are booked.
+        let status = child("Sts").and_then(|s| by_name(s, "Cd").and_then(|c| c.text()).or(s.text())).unwrap_or_default().trim().to_uppercase();
+        if !status.is_empty() && status != "BOOK" {
+            pending += 1;
+            continue;
+        }
+        let amt = child("Amt");
+        let amount = amt.and_then(|a| a.text()).and_then(|t| Decimal::from_str(t.trim()).ok()).unwrap_or_default();
+        let credit = child("CdtDbtInd").and_then(|a| a.text()).map(|t| t.trim() == "CRDT").unwrap_or(true);
+        let date_node = child("BookgDt").or_else(|| child("ValDt"));
         let date = date_node.and_then(|d| by_name(d, "Dt").or_else(|| by_name(d, "DtTm"))).and_then(|d| d.text()).and_then(parse_date);
         let Some(date) = date else { continue };
+        let currency = amt.and_then(|a| a.attribute("Ccy")).unwrap_or("EUR");
+        if currency != "EUR" {
+            errors.push(format!("Umsatz vom {} über {} {currency} nicht importiert – nur Euro-Beträge werden übernommen.", crate::util::fmt_date(date), amount));
+            continue;
+        }
+        // A reversal keeps its own direction (CdtDbtInd); it is only marked in the purpose.
+        let reversal = child("RvslInd").and_then(|n| n.text()).is_some_and(|t| t.trim().eq_ignore_ascii_case("true"));
         let party_tag = if credit { "Dbtr" } else { "Cdtr" };
         let acct_tag = if credit { "DbtrAcct" } else { "CdtrAcct" };
         let rltd = by_name(ntry, "RltdPties");
@@ -284,18 +301,22 @@ fn parse_camt(xml: &str) -> Result<ImportPreview> {
         {
             purpose.push(t.trim().to_string());
         }
+        let purpose = purpose.join(" ");
         transactions.push(ImportedTx {
             date,
             amount: if credit { amount } else { -amount },
             counterparty,
             iban,
-            purpose: purpose.join(" "),
+            purpose: if reversal { format!("Rückbuchung: {purpose}") } else { purpose },
             hash: String::new(),
             duplicate: false,
             locked: false,
         });
     }
-    Ok(ImportPreview { format: "camt".into(), columns: vec![], sample: vec![], mapping: None, transactions, duplicates: 0, locked: 0, errors: vec![] })
+    if pending > 0 {
+        errors.push(format!("{pending} vorgemerkte, noch nicht gebuchte Umsätze wurden übersprungen."));
+    }
+    Ok(ImportPreview { format: "camt".into(), columns: vec![], sample: vec![], mapping: None, transactions, duplicates: 0, locked: 0, errors })
 }
 
 pub fn preview(conn: &Connection, account_id: i64, bytes: &[u8], mapping: Option<CsvMapping>) -> Result<ImportPreview> {
@@ -436,6 +457,28 @@ mod tests {
         assert_eq!((p.locked, p.transactions.iter().filter(|t| t.locked).count()), (2, 2));
         let s = import(&conn, acc, p.transactions, false).unwrap();
         assert_eq!((s.imported, s.locked), (1, 2), "import continues after locked rows");
+    }
+
+    #[test]
+    fn camt_skips_pending_and_foreign_currency_and_marks_reversals() {
+        let entry = |amt: &str, ccy: &str, ind: &str, sts: &str, extra: &str, text: &str| {
+            format!(
+                "<Ntry><Amt Ccy=\"{ccy}\">{amt}</Amt><CdtDbtInd>{ind}</CdtDbtInd>{extra}<Sts><Cd>{sts}</Cd></Sts><BookgDt><Dt>2026-03-02</Dt></BookgDt>\
+                 <NtryDtls><TxDtls><RmtInf><Ustrd>{text}</Ustrd></RmtInf></TxDtls></NtryDtls></Ntry>"
+            )
+        };
+        let xml = format!(
+            "<Document><BkToCstmrStmt><Stmt>{}{}{}{}</Stmt></BkToCstmrStmt></Document>",
+            entry("119.00", "EUR", "CRDT", "BOOK", "", "RE-1"),
+            entry("50.00", "EUR", "DBIT", "PDNG", "", "vorgemerkt"),
+            entry("20.00", "USD", "DBIT", "BOOK", "", "Abo"),
+            entry("119.00", "EUR", "DBIT", "BOOK", "<RvslInd>true</RvslInd>", "Lastschrift RE-1"),
+        );
+        let p = parse_camt(&xml).unwrap();
+        let got: Vec<(Decimal, &str)> = p.transactions.iter().map(|t| (t.amount, t.purpose.as_str())).collect();
+        assert_eq!(got, vec![(dec!(119), "RE-1"), (dec!(-119), "Rückbuchung: Lastschrift RE-1")]);
+        assert_eq!(p.errors.len(), 2, "{:?}", p.errors);
+        assert!(p.errors[0].contains("USD") && p.errors[1].contains("1 vorgemerkte"));
     }
 
     #[test]
