@@ -19,5 +19,6 @@ pub mod finance;
 pub mod masterdata;
 pub mod posting;
 pub mod receipts;
+pub mod recurring;
 pub mod reports;
 pub mod settings;

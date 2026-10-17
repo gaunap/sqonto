@@ -78,6 +78,8 @@ pub fn router(state: AppState) -> Router {
         .route("/documents/{id}/xrechnung", get(documents::xrechnung))
         .route("/documents/{id}/zugferd", get(documents::zugferd))
         .route("/documents/{id}/einvoice-check", get(documents::einvoice_check))
+        .route("/recurring", get(documents::recurring).post(documents::save_recurring))
+        .route("/recurring/{id}", put(documents::save_recurring).delete(documents::delete_recurring))
         .route("/dunning", get(documents::dunnings).post(documents::create_dunning))
         .route("/dunning/suggestions", get(documents::dunning_suggestions))
         .route("/dunning/preview", post(documents::dunning_preview))

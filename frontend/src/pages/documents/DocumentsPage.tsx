@@ -13,6 +13,7 @@ import {
   IconExternalLink,
   IconFileCode,
   IconFileExport,
+  IconRepeat,
   IconPlus,
   IconSearch,
   IconFileInvoice,
@@ -23,6 +24,7 @@ import { downloadFile, openFile } from '@/api/client';
 import { notifyError, useApi } from '@/api/hooks';
 import type { DocumentListItem } from '@/api/types';
 import { ListTable } from '@/components/ListTable';
+import { RecurringDrawer } from '@/components/Recurring';
 import { Empty, Page, PageHeader, StatPill, StatusBadge } from '@/components/ui';
 import { exportCsv } from '@/lib/csv';
 import { date, money, relativeDays } from '@/lib/format';
@@ -71,6 +73,7 @@ export function DocumentsPage({ docType }: { docType: DocType }) {
   const status = params.get('status') ?? 'all';
   const [q, setQ] = useState('');
   const [range, setRange] = useState<[string | null, string | null]>([null, null]);
+  const [recurringOpen, setRecurringOpen] = useState(false);
   const { data, isFetching } = useApi<DocumentListItem[]>('/documents', {
     doc_type: docType,
     status: status === 'all' ? undefined : status,
@@ -127,6 +130,11 @@ export function DocumentsPage({ docType }: { docType: DocType }) {
         }
         actions={
           <>
+            {docType === 'invoice' && (
+              <Button variant="default" leftSection={<IconRepeat size={16} />} onClick={() => setRecurringOpen(true)}>
+                Abo-Rechnungen
+              </Button>
+            )}
             <Button
               variant="default"
               leftSection={<IconFileExport size={16} />}
@@ -324,6 +332,7 @@ export function DocumentsPage({ docType }: { docType: DocType }) {
           )}
         </Card>
       </Stack>
+      {docType === 'invoice' && <RecurringDrawer opened={recurringOpen} onClose={() => setRecurringOpen(false)} />}
     </Page>
   );
 }

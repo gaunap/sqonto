@@ -422,6 +422,27 @@ pub async fn preview_input(State(st): State<AppState>, Json(input): Json<Documen
     Ok(Json(PreviewResult { pages: render_svgs(&st, job).await?, totals }))
 }
 
+// ---------------------------------------------------------------- Abo-Rechnungen
+
+pub async fn recurring(State(st): State<AppState>) -> ApiResult<Vec<crate::services::recurring::RecurringView>> {
+    st.read(crate::services::recurring::list).map(Json)
+}
+
+/// Saves an Abo-Rechnung; periods already due are created right away.
+pub async fn save_recurring(State(st): State<AppState>, id: Option<Path<i64>>, Json(mut r): Json<crate::models::RecurringInvoice>) -> ApiResult<Vec<crate::services::recurring::RecurringView>> {
+    r.id = id.map(|Path(i)| i).unwrap_or(0);
+    st.write(|c| {
+        crate::services::recurring::save(c, r)?;
+        crate::services::recurring::create_due(c, today())?;
+        crate::services::recurring::list(c)
+    })
+    .map(Json)
+}
+
+pub async fn delete_recurring(State(st): State<AppState>, Path(id): Path<i64>) -> ApiResult<MessageResponse> {
+    st.write(|c| crate::services::recurring::delete(c, id)).map(|_| Json(MessageResponse { message: "Abo-Rechnung gelöscht".into() }))
+}
+
 // ---------------------------------------------------------------- Mahnwesen
 
 pub async fn dunnings(State(st): State<AppState>) -> ApiResult<Vec<DunningListItem>> {

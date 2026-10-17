@@ -97,6 +97,8 @@ export type * from './ReceiptFull';
 export type * from './ReceiptInput';
 export type * from './ReceiptLine';
 export type * from './ReceiptListItem';
+export type * from './RecurringInvoice';
+export type * from './RecurringView';
 export type * from './RelatedDoc';
 export type * from './ReportRow';
 export type * from './ResetRequest';

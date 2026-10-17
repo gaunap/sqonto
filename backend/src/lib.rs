@@ -111,9 +111,9 @@ pub async fn launch(port: u16, dir: &Path) -> anyhow::Result<Launch> {
     Ok(Launch::Started(Server { listener, app, port, url: format!("http://localhost:{port}"), data_dir: dir.to_path_buf() }))
 }
 
-/// Hourly upkeep while the program runs, starting right away: the daily automatic backup and the
-/// depreciation of a new year – also when the program keeps running over New Year. Both only do
-/// work when it is due.
+/// Hourly upkeep while the program runs, starting right away: the daily automatic backup, due
+/// Abo-Rechnungen and the depreciation of a new year – also when the program keeps running over
+/// New Year. Each only does work when it is due.
 fn spawn_maintenance(state: AppState) {
     tokio::spawn(async move {
         let mut hourly = tokio::time::interval(Duration::from_secs(3600));
@@ -124,6 +124,11 @@ fn spawn_maintenance(state: AppState) {
             let _ = tokio::task::spawn_blocking(move || {
                 if let Err(e) = st.write(services::posting::ensure_current_afa) {
                     tracing::warn!("Abschreibungen des neuen Jahres: {}", e.message);
+                }
+                match st.write(|c| services::recurring::create_due(c, util::today())) {
+                    Ok(ids) if !ids.is_empty() => tracing::info!("{} Rechnungsentwürfe aus Abo-Rechnungen erstellt", ids.len()),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("Abo-Rechnungen: {}", e.message),
                 }
                 match api::auto_backup(&st, false) {
                     Ok(Some(path)) => tracing::info!("Automatische Sicherung: {}", path.display()),

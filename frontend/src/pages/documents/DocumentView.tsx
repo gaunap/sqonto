@@ -54,12 +54,14 @@ import {
   IconX,
   IconBellRinging,
   IconFlag,
+  IconRepeat,
 } from '@tabler/icons-react';
 import { api, downloadFile, openFile } from '@/api/client';
 import { notifyError, useAction, useApi, useSettings } from '@/api/hooks';
-import type { DocumentFull, EinvoiceCheck, IdResponse, Pages } from '@/api/types';
+import type { DocumentFull, EinvoiceCheck, IdResponse, Pages, RecurringView } from '@/api/types';
 import { PaymentModal } from '@/components/PaymentModal';
 import { PagesPreview } from '@/components/DocumentParts';
+import { CYCLES, RecurringModal } from '@/components/Recurring';
 import { InfoRow, Money, Page, PageHeader, SectionCard, StatusBadge, confirmAction } from '@/components/ui';
 import { documentIncoming, documentRemaining } from '@/lib/calc';
 import { date, dateTime, money, relativeDays } from '@/lib/format';
@@ -265,6 +267,9 @@ export function DocumentViewPage() {
   const [payOpen, setPayOpen] = useState(false);
   const [partialOpen, setPartialOpen] = useState(false);
   const [dunningOpen, setDunningOpen] = useState(false);
+  const [recurringOpen, setRecurringOpen] = useState(false);
+  const { data: recurringList } = useApi<RecurringView[]>('/recurring');
+  const recurring = recurringList?.find((r) => r.recurring.template_id === Number(id))?.recurring ?? null;
 
   useEffect(() => {
     if (data && data.doc.status === 'draft') navigate(`/dokumente/${data.doc.id}/bearbeiten`, { replace: true });
@@ -433,6 +438,11 @@ export function DocumentViewPage() {
                     {!doc.sent_at && (
                       <Menu.Item leftSection={<IconMail size={16} />} onClick={() => sent.mutate('Post')}>
                         Als versendet markieren
+                      </Menu.Item>
+                    )}
+                    {doc.kind === 'standard' && doc.status !== 'cancelled' && (
+                      <Menu.Item leftSection={<IconRepeat size={16} />} onClick={() => setRecurringOpen(true)}>
+                        {recurring ? 'Abo-Rechnung bearbeiten …' : 'Als Abo-Rechnung wiederholen …'}
                       </Menu.Item>
                     )}
                     {doc.kind !== 'cancellation' && doc.status !== 'cancelled' && (
@@ -657,6 +667,23 @@ export function DocumentViewPage() {
               </SectionCard>
             )}
 
+            {recurring && (
+              <SectionCard
+                title={<Group gap={6}><IconRepeat size={16} />Abo-Rechnung</Group>}
+                actions={
+                  <Button size="compact-sm" variant="light" onClick={() => setRecurringOpen(true)}>
+                    Bearbeiten
+                  </Button>
+                }
+              >
+                <Text size="sm">
+                  {CYCLES.find((c) => c.value === recurring.cycle)?.label ?? recurring.cycle}
+                  {recurring.active ? ` · nächster Entwurf am ${date(recurring.next_date)}` : ' · beendet'}
+                  {recurring.end_date ? ` · bis ${date(recurring.end_date)}` : ''}
+                </Text>
+              </SectionCard>
+            )}
+
             {data.related.length > 0 && (
               <SectionCard title="Verknüpfte Dokumente">
                 <Stack gap={6}>
@@ -709,6 +736,7 @@ export function DocumentViewPage() {
       )}
       {canPartial && <PartialModal opened={partialOpen} onClose={() => setPartialOpen(false)} doc={data} />}
       {isInvoice && <DunningModal opened={dunningOpen} onClose={() => setDunningOpen(false)} doc={data} />}
+      {isInvoice && <RecurringModal opened={recurringOpen} onClose={() => setRecurringOpen(false)} templateId={doc.id} templateDate={doc.date} existing={recurring} />}
     </Page>
   );
 }

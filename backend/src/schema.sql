@@ -230,6 +230,19 @@ CREATE INDEX IF NOT EXISTS idx_allocations_tx ON allocations(transaction_id);
 CREATE INDEX IF NOT EXISTS idx_allocations_doc ON allocations(document_id);
 CREATE INDEX IF NOT EXISTS idx_allocations_receipt ON allocations(receipt_id);
 
+-- Abo-Rechnungen: invoice drafts created from a template invoice
+CREATE TABLE IF NOT EXISTS recurring_invoices (
+  id               INTEGER PRIMARY KEY,
+  template_id      INTEGER NOT NULL REFERENCES documents(id),
+  cycle            TEXT NOT NULL DEFAULT 'monthly',
+  day              INTEGER NOT NULL DEFAULT 1,
+  next_date        TEXT NOT NULL,
+  end_date         TEXT,
+  active           INTEGER NOT NULL DEFAULT 1,
+  last_document_id INTEGER,
+  created_at       TEXT NOT NULL DEFAULT ''
+);
+
 -- Bankregeln: automatic booking of recurring bank movements
 CREATE TABLE IF NOT EXISTS bank_rules (
   id           INTEGER PRIMARY KEY,

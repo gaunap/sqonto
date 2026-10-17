@@ -518,6 +518,9 @@ pub fn delete(conn: &Connection, id: i64) -> Result<()> {
     if refs > 0 {
         bail_user!("Dem Dokument sind Zahlungen zugeordnet.");
     }
+    if db::scalar_i64(conn, "SELECT COUNT(*) FROM recurring_invoices WHERE template_id = ?1", &[v(id)])? > 0 {
+        bail_user!("Der Entwurf ist die Vorlage einer Abo-Rechnung. Bitte zuerst die Abo-Rechnung löschen.");
+    }
     conn.execute("UPDATE documents SET source_id = NULL WHERE source_id = ?1", [id])?;
     conn.execute("UPDATE documents SET base_id = NULL WHERE base_id = ?1 AND status = 'draft'", [id])?;
     if db::scalar_i64(conn, "SELECT COUNT(*) FROM documents WHERE base_id = ?1", &[v(id)])? > 0 {

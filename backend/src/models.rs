@@ -690,6 +690,23 @@ entity! {
 }
 
 entity! {
+    /// Abo-Rechnung: creates invoice drafts from a template invoice.
+    pub struct RecurringInvoice in "recurring_invoices" {
+        pub id: i64,
+        pub template_id: i64,
+        /// monthly | quarterly | halfyearly | yearly
+        pub cycle: String,
+        /// Day of the month the invoices are dated (short months use their last day).
+        pub day: i64,
+        pub next_date: NaiveDate,
+        pub end_date: Option<NaiveDate>,
+        pub active: bool,
+        pub last_document_id: Option<i64>,
+        pub created_at: String,
+    }
+}
+
+entity! {
     /// Booking rule for bank movements (Bankregel).
     pub struct BankRule in "bank_rules" {
         pub id: i64,
