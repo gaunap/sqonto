@@ -348,6 +348,7 @@ export function ReceiptEditorPage() {
       },
     },
   );
+  const removePayment = useAction((allocId: number) => api.del(`/allocations/${allocId}`), { success: 'Zahlung entfernt' });
   const remove = useAction(() => api.del(`/receipts/${id}`), {
     success: 'Beleg gelöscht',
     onSuccess: () => {
@@ -615,7 +616,12 @@ export function ReceiptEditorPage() {
                         <Text size="sm" fw={600} className="tabular">
                           {money(Math.abs(p.allocation.amount))}
                         </Text>
-                        <ActionIcon size="sm" color="red" onClick={() => api.del(`/allocations/${p.allocation.id}`).then(() => refetch()).catch(notifyError)} aria-label="Zahlung entfernen">
+                        <ActionIcon
+                          size="sm"
+                          color="red"
+                          onClick={() => confirmAction({ title: 'Zahlung entfernen', message: 'Die Zuordnung dieser Zahlung wird entfernt.', danger: true, confirmLabel: 'Entfernen', onConfirm: () => removePayment.mutate(p.allocation.id) })}
+                          aria-label="Zahlung entfernen"
+                        >
                           <IconTrash size={14} />
                         </ActionIcon>
                       </Group>

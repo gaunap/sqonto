@@ -9,7 +9,7 @@ import { api, downloadFile } from '@/api/client';
 import { notifyError, useAction, useApi, useSettings } from '@/api/hooks';
 import type { UstvaPeriod, UstvaReport } from '@/api/types';
 import { DateField, YearSelect } from '@/components/inputs';
-import { Page, PageHeader } from '@/components/ui';
+import { Page, PageHeader, confirmAction } from '@/components/ui';
 import { date, money, num, relativeDays, today } from '@/lib/format';
 
 function KzTag({ kz, strong }: { kz: string; strong?: boolean }) {
@@ -231,7 +231,19 @@ export function UstvaPage() {
                     </Button>
                   )}
                   {report.filing && (
-                    <Button variant="subtle" color="gray" leftSection={<IconX size={16} />} onClick={() => unfile.mutate()}>
+                    <Button
+                      variant="subtle"
+                      color="gray"
+                      leftSection={<IconX size={16} />}
+                      onClick={() =>
+                        confirmAction({
+                          title: 'Meldung zurücksetzen',
+                          message: `Die Markierung „übermittelt“ für ${report.period_label} wird entfernt. Eine bereits an das Finanzamt übermittelte Voranmeldung bleibt davon unberührt.`,
+                          confirmLabel: 'Zurücksetzen',
+                          onConfirm: () => unfile.mutate(),
+                        })
+                      }
+                    >
                       Meldung zurücksetzen
                     </Button>
                   )}

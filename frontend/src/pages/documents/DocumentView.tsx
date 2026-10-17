@@ -643,7 +643,11 @@ export function DocumentViewPage() {
                         <ActionIcon onClick={() => openFile(`/dunning/${d.id}/pdf`)} aria-label="PDF öffnen">
                           <IconExternalLink size={16} />
                         </ActionIcon>
-                        <ActionIcon color="red" onClick={() => removeDunning.mutate(d.id)} aria-label="Mahnung löschen">
+                        <ActionIcon
+                          color="red"
+                          onClick={() => confirmAction({ title: 'Mahnung löschen', message: `„${d.title}“ vom ${date(d.date)} wird gelöscht.`, danger: true, confirmLabel: 'Löschen', onConfirm: () => removeDunning.mutate(d.id) })}
+                          aria-label="Mahnung löschen"
+                        >
                           <IconTrash size={14} />
                         </ActionIcon>
                       </Group>
