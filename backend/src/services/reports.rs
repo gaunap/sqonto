@@ -1338,6 +1338,9 @@ pub fn dashboard(conn: &Connection) -> Result<Dashboard> {
     if drafts > 0 {
         todos.push(Todo { kind: "drafts".into(), label: plural(drafts, "Rechnungsentwurf", "Rechnungsentwürfe"), count: drafts, link: "/rechnungen?status=draft".into(), severity: "gray".into() });
     }
+    if crate::services::dunning::base_rate_outdated(&s, t) {
+        todos.push(Todo { kind: "base_rate".into(), label: "Basiszinssatz für Verzugszinsen prüfen".into(), count: 1, link: "/einstellungen/mahnwesen".into(), severity: "orange".into() });
+    }
     let unfiled = unfiled_ustva(conn, t)?;
     if unfiled > 0 {
         todos.push(Todo { kind: "ustva".into(), label: plural(unfiled, "offene Umsatzsteuer-Voranmeldung", "offene Umsatzsteuer-Voranmeldungen"), count: unfiled, link: "/steuern/ustva".into(), severity: "violet".into() });

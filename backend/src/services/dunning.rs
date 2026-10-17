@@ -95,6 +95,36 @@ pub fn suggestions(conn: &Connection) -> Result<Vec<DunningSuggestion>> {
     Ok(suggestions_all(conn)?.into_iter().filter(|s| s.due).collect())
 }
 
+/// Verzugspauschale for business customers (§ 288 Abs. 5 BGB).
+pub const FLAT_FEE_B2B: Decimal = Decimal::from_parts(40, 0, 0, false, 0);
+
+fn is_b2b(contact: Option<&Contact>) -> bool {
+    contact.map(|c| c.kind != "person").unwrap_or(true)
+}
+
+/// Fee of a dunning. With the Verzugspauschale, a business customer pays at least 40 € from the
+/// first Mahnung on; the Pauschale is offset against the fees of the levels (§ 288 Abs. 5 S. 3
+/// BGB), so in total the larger of both is charged.
+fn fee_for(s: &Settings, contact: Option<&Contact>, level: i64, charged_before: Decimal) -> Decimal {
+    let def = level_def(s, level);
+    if !s.dunning.flat_fee_b2b || !is_b2b(contact) || level < 1 {
+        return def.fee;
+    }
+    let level_fees: Decimal = (0..=level).map(|l| level_def(s, l).fee).sum();
+    (level_fees.max(FLAT_FEE_B2B) - charged_before).max(Decimal::ZERO)
+}
+
+/// The Basiszinssatz changes on 1 January and 1 July (§ 247 BGB): the entered value may be outdated
+/// once a change date has passed since it was confirmed.
+pub fn base_rate_outdated(s: &Settings, today: NaiveDate) -> bool {
+    use chrono::Datelike;
+    if !s.dunning.interest_enabled {
+        return false;
+    }
+    let last_change = crate::util::ymd(today.year(), if today.month() >= 7 { 7 } else { 1 }, 1);
+    s.dunning.base_rate_since.is_none_or(|d| d < last_change)
+}
+
 pub fn interest_for(s: &Settings, contact: Option<&Contact>, open: Decimal, due: Option<NaiveDate>, at: NaiveDate) -> Decimal {
     if !s.dunning.interest_enabled {
         return Decimal::ZERO;
@@ -104,7 +134,7 @@ pub fn interest_for(s: &Settings, contact: Option<&Contact>, open: Decimal, due:
     if days <= 0 {
         return Decimal::ZERO;
     }
-    let b2b = contact.map(|c| c.kind != "person").unwrap_or(true);
+    let b2b = is_b2b(contact);
     let rate = s.dunning.base_rate + if b2b { s.dunning.surcharge_b2b } else { s.dunning.surcharge_b2c };
     r2(open * rate / HUNDRED * Decimal::from(days) / Decimal::from(365))
 }
@@ -142,7 +172,13 @@ pub fn build(conn: &Connection, req: &DunningRequest) -> Result<(Dunning, Docume
         level,
         date,
         due_date: date + Duration::days(if def.deadline_days > 0 { def.deadline_days } else { 10 }),
-        fee: req.fee.unwrap_or(def.fee),
+        fee: match req.fee {
+            Some(fee) => fee,
+            None => {
+                let charged: Decimal = db::query::<Dunning>(conn, "WHERE document_id = ?1", &[v(doc.id)])?.iter().map(|d| d.fee).sum();
+                fee_for(&s, contact.as_ref(), level, charged)
+            }
+        },
         interest,
         open_amount: open,
         title: def.title.clone(),
@@ -186,4 +222,47 @@ pub fn list(conn: &Connection) -> Result<Vec<DunningListItem>> {
         out.push(DunningListItem { level_name: level_def(&s, dn.level).name, document_number: doc.number, contact_name, dunning: dn });
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::util::ymd;
+    use rust_decimal_macros::dec;
+
+    fn settings(fees: &[Decimal], flat_fee: bool) -> Settings {
+        let mut s = Settings::default();
+        s.dunning.levels = fees.iter().enumerate().map(|(i, f)| DunningLevel { level: i as i64, fee: *f, ..Default::default() }).collect();
+        s.dunning.flat_fee_b2b = flat_fee;
+        s
+    }
+
+    #[test]
+    fn flat_fee_is_offset_against_level_fees() {
+        let company = Contact { kind: "organization".into(), company: "Kunde GmbH".into(), ..Default::default() };
+        let person = Contact { kind: "person".into(), last_name: "Muster".into(), ..Default::default() };
+        let s = settings(&[dec!(0), dec!(5), dec!(10), dec!(30)], true);
+        // Zahlungserinnerung: no Pauschale yet; 1. Mahnung: 40 €; then nothing until the level fees exceed 40 €.
+        assert_eq!(fee_for(&s, Some(&company), 0, dec!(0)), dec!(0));
+        assert_eq!(fee_for(&s, Some(&company), 1, dec!(0)), dec!(40));
+        assert_eq!(fee_for(&s, Some(&company), 2, dec!(40)), dec!(0));
+        assert_eq!(fee_for(&s, Some(&company), 3, dec!(40)), dec!(5), "0 + 5 + 10 + 30 = 45 > 40");
+        // Consumers and disabled Pauschale: the fees of the levels.
+        assert_eq!(fee_for(&s, Some(&person), 1, dec!(0)), dec!(5));
+        assert_eq!(fee_for(&settings(&[dec!(0), dec!(5)], false), Some(&company), 1, dec!(0)), dec!(5));
+    }
+
+    #[test]
+    fn base_rate_must_be_confirmed_after_each_change_date() {
+        let mut s = Settings::default();
+        assert!(!base_rate_outdated(&s, ymd(2026, 10, 17)), "no interest, no warning");
+        s.dunning.interest_enabled = true;
+        assert!(base_rate_outdated(&s, ymd(2026, 10, 17)), "never confirmed");
+        s.dunning.base_rate_since = Some(ymd(2026, 1, 1));
+        assert!(base_rate_outdated(&s, ymd(2026, 10, 17)), "1 July has passed");
+        assert!(!base_rate_outdated(&s, ymd(2026, 6, 30)));
+        s.dunning.base_rate_since = Some(ymd(2026, 7, 1));
+        assert!(!base_rate_outdated(&s, ymd(2026, 12, 31)));
+        assert!(base_rate_outdated(&s, ymd(2027, 1, 2)));
+    }
 }

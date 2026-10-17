@@ -847,10 +847,14 @@ pub struct DunningSettings {
     pub interest_enabled: bool,
     #[ts(type = "number")]
     pub base_rate: Decimal,
+    /// Since when the entered Basiszinssatz applies (it changes on 1 January and 1 July).
+    pub base_rate_since: Option<NaiveDate>,
     #[ts(type = "number")]
     pub surcharge_b2b: Decimal,
     #[ts(type = "number")]
     pub surcharge_b2c: Decimal,
+    /// Charge the Verzugspauschale of 40 € to business customers (§ 288 Abs. 5 BGB).
+    pub flat_fee_b2b: bool,
 }
 
 impl Default for DunningSettings {
@@ -859,8 +863,10 @@ impl Default for DunningSettings {
             levels: crate::services::defaults::default_dunning_levels(),
             interest_enabled: false,
             base_rate: Decimal::new(127, 2),
+            base_rate_since: None,
             surcharge_b2b: Decimal::from(9),
             surcharge_b2c: Decimal::from(5),
+            flat_fee_b2b: false,
         }
     }
 }

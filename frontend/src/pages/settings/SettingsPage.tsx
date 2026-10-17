@@ -553,6 +553,9 @@ function DunningTab({ s, patch }: { s: Settings; patch: Patch }) {
   const d = s.dunning;
   const set = (p: Partial<Settings['dunning']>) => patch((x) => ({ ...x, dunning: { ...x.dunning, ...p } }));
   const setLevel = (i: number, p: Partial<Settings['dunning']['levels'][number]>) => set({ levels: d.levels.map((l, j) => (j === i ? { ...l, ...p } : l)) });
+  // The Basiszinssatz changes on 1 January and 1 July.
+  const lastChange = dayjs().format(dayjs().month() >= 6 ? 'YYYY-07-01' : 'YYYY-01-01');
+  const baseRateOutdated = !d.base_rate_since || d.base_rate_since < lastChange;
   return (
     <Stack gap="lg" maw={1000}>
       {d.levels.map((l, i) => (
@@ -578,11 +581,30 @@ function DunningTab({ s, patch }: { s: Settings; patch: Patch }) {
           Verzugszinsen (§ 288 BGB)
         </Text>
         <Switch label="Verzugszinsen ab der 1. Mahnung berechnen" checked={d.interest_enabled} onChange={(e) => set({ interest_enabled: e.currentTarget.checked })} mb="sm" />
-        <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="sm">
-          <NumberInput label="Basiszinssatz" suffix=" %" decimalScale={2} decimalSeparator="," value={d.base_rate} onChange={(v) => set({ base_rate: Number(v) || 0 })} description="Aktuellen Wert bei der Bundesbank prüfen" />
+        {d.interest_enabled && baseRateOutdated && (
+          <Alert color="orange" icon={<IconAlertTriangle size={16} />} p="sm" mb="sm">
+            <Text size="sm">
+              Der Basiszinssatz ändert sich zum 1. Januar und 1. Juli. Bitte den aktuellen Wert bei der Deutschen Bundesbank prüfen und mit dem Datum eintragen, ab dem er gilt.
+            </Text>
+          </Alert>
+        )}
+        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+          <NumberInput label="Basiszinssatz" suffix=" %" decimalScale={2} decimalSeparator="," value={d.base_rate} onChange={(v) => set({ base_rate: Number(v) || 0 })} description="Veröffentlicht von der Deutschen Bundesbank" />
+          <DateField label="gültig seit" value={d.base_rate_since} onChange={(v) => set({ base_rate_since: v })} clearable />
           <NumberInput label="Aufschlag Unternehmen" suffix=" %-Punkte" value={d.surcharge_b2b} onChange={(v) => set({ surcharge_b2b: Number(v) || 0 })} />
           <NumberInput label="Aufschlag Verbraucher" suffix=" %-Punkte" value={d.surcharge_b2c} onChange={(v) => set({ surcharge_b2c: Number(v) || 0 })} />
         </SimpleGrid>
+      </Card>
+      <Card>
+        <Text fw={650} mb="sm">
+          Verzugspauschale (§ 288 Abs. 5 BGB)
+        </Text>
+        <Switch
+          label="Unternehmen ab der 1. Mahnung 40 € Verzugspauschale berechnen"
+          description="Die Pauschale wird auf die Mahngebühren angerechnet: Insgesamt wird der höhere Betrag aus Pauschale und Mahngebühren berechnet. Verbraucher sind ausgenommen."
+          checked={d.flat_fee_b2b}
+          onChange={(e) => set({ flat_fee_b2b: e.currentTarget.checked })}
+        />
       </Card>
     </Stack>
   );
