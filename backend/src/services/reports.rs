@@ -986,7 +986,7 @@ pub fn open_items(conn: &Connection) -> Result<OpenItems> {
     let t = today();
     let rb: Vec<(i64, Decimal)> = receivables
         .iter()
-        .filter(|d| d.doc_type == "invoice")
+        .filter(|d| d.doc_type == "invoice" && d.open_amount > Decimal::ZERO)
         .map(|d| (d.due_date.map(|x| (t - x).num_days()).unwrap_or(0), d.open_amount))
         .collect();
     let pb: Vec<(i64, Decimal)> = payables

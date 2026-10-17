@@ -398,6 +398,15 @@ impl Document {
         }
         self.gross_total - self.paid_total
     }
+    /// Direction of the money that settles the document: +1 if it is received, -1 if it is paid
+    /// out (credit notes, invoices with a negative total – e.g. a Schlussrechnung below its Abschläge).
+    pub fn money_sign(&self) -> Decimal {
+        self.sign() * self.gross_total.signum()
+    }
+    /// Amount still to be paid or refunded – positive while the document is open.
+    pub fn remaining(&self) -> Decimal {
+        self.open_amount() * self.gross_total.signum()
+    }
 }
 
 entity! {

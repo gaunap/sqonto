@@ -474,15 +474,16 @@ pub fn pay_document(conn: &Connection, doc_id: i64, req: PaymentRequest) -> Resu
         bail_user!("Für dieses Dokument kann keine Zahlung erfasst werden.");
     }
     let date = req.date.unwrap_or_else(today);
-    let open = doc.open_amount();
+    // Credit notes and negative invoices are settled by a refund.
+    let open = doc.remaining();
     let amount = r2(req.amount);
     if amount < Decimal::ZERO {
         bail_user!("Bitte einen positiven Betrag angeben.");
     }
     if amount > open + Decimal::new(1, 2) {
-        bail_user!("Der Betrag übersteigt den offenen Betrag von {}.", fmt_money(open));
+        bail_user!("Der Betrag übersteigt den offenen Betrag von {}.", fmt_money(open.max(Decimal::ZERO)));
     }
-    let sign = doc.sign();
+    let sign = doc.money_sign();
     if amount > Decimal::ZERO || req.fee_amount > Decimal::ZERO {
         let mut allocations = Vec::new();
         if amount > Decimal::ZERO {
@@ -531,8 +532,8 @@ pub fn pay_document(conn: &Connection, doc_id: i64, req: PaymentRequest) -> Resu
     }
     if !req.writeoff.is_empty() {
         let doc: Document = db::get(conn, doc_id)?;
-        let rest = doc.open_amount();
-        if rest > Decimal::ZERO {
+        let rest = doc.remaining();
+        if rest > Decimal::ZERO && doc.gross_total > Decimal::ZERO {
             add_writeoff(conn, doc_id, &req.writeoff, rest, date)?;
         }
     }

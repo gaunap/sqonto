@@ -9,6 +9,7 @@ use anyhow::Result;
 use chrono::{Duration, NaiveDate};
 use rusqlite::Connection;
 use rust_decimal::Decimal;
+use rust_decimal::prelude::Signed;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -201,7 +202,7 @@ pub fn list(conn: &Connection, f: &DocumentFilter) -> Result<Vec<DocumentListIte
         let status_ok = match f.status.as_str() {
             "" | "all" => true,
             "overdue" => overdue > 0,
-            "unpaid" => d.open_amount() > Decimal::ZERO,
+            "unpaid" => d.remaining() > Decimal::ZERO,
             s => d.status == s,
         };
         if !status_ok {
@@ -922,15 +923,17 @@ pub fn recompute_paid(conn: &Connection, id: i64) -> Result<()> {
     let allocs = db::query::<Allocation>(conn, "WHERE document_id = ?1", &[v(id)])?;
     let sum: Decimal = allocs.iter().map(|a| a.amount).sum();
     doc.paid_total = sum * doc.sign();
-    let open = doc.gross_total - doc.paid_total;
-    doc.status = if doc.gross_total > Decimal::ZERO && open <= Decimal::ZERO {
+    // A total of 0 (e.g. a Schlussrechnung covered by its Abschläge) is settled right away; a
+    // negative total is settled by a refund.
+    let settled = doc.remaining() <= Decimal::ZERO;
+    doc.status = if settled {
         "paid".into()
-    } else if doc.paid_total > Decimal::ZERO {
+    } else if !doc.paid_total.is_zero() && doc.paid_total.signum() == doc.gross_total.signum() {
         "partial".into()
     } else {
         "open".into()
     };
-    doc.paid_at = if doc.status == "paid" { allocs.iter().map(|a| a.date).max() } else { None };
+    doc.paid_at = if settled { allocs.iter().map(|a| a.date).max().or(Some(doc.date)) } else { None };
     db::update(conn, &doc)?;
     Ok(())
 }
@@ -971,4 +974,65 @@ pub fn placeholders(s: &Settings, doc: &Document, contact: Option<&Contact>) -> 
         ("Referenz", doc.reference.clone()),
         ("Kundennummer", contact.map(|c| c.number.clone()).unwrap_or_default()),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::PaymentAccount;
+    use crate::services::finance::{self, PaymentRequest};
+    use crate::util::ymd;
+    use rust_decimal_macros::dec;
+
+    fn setup() -> (Connection, i64) {
+        let conn = db::open_memory();
+        cfg::ensure_seeded(&conn).unwrap();
+        let bank = finance::save_account(&conn, PaymentAccount { name: "Bank".into(), opening_date: ymd(2020, 1, 1), ..Default::default() }).unwrap();
+        (conn, bank)
+    }
+
+    fn item(price: Decimal) -> DocumentLine {
+        DocumentLine { line_type: "item".into(), name: "Leistung".into(), quantity: dec!(1), unit_price: price, tax_rate: dec!(19), ..Default::default() }
+    }
+
+    /// Finalized order with one fully paid Abschlag of `percent` %.
+    fn order_with_paid_partial(conn: &Connection, bank: i64, percent: Decimal) -> i64 {
+        let doc = Document { doc_type: "order".into(), address: "Kunde GmbH".into(), tax_mode: "standard".into(), ..Default::default() };
+        let order = create(conn, DocumentInput { doc, lines: vec![item(dec!(1000))] }).unwrap();
+        finalize(conn, order).unwrap();
+        let partial = create_partial(conn, order, PartialRequest { mode: "percent".into(), value: percent }).unwrap();
+        let p = finalize(conn, partial).unwrap();
+        finance::pay_document(conn, partial, PaymentRequest { account_id: Some(bank), amount: p.gross_total, ..Default::default() }).unwrap();
+        order
+    }
+
+    #[test]
+    fn final_invoice_covered_by_partials_is_paid() {
+        let (conn, bank) = setup();
+        let order = order_with_paid_partial(&conn, bank, dec!(100));
+        let fin = finalize(&conn, create_final(&conn, order).unwrap()).unwrap();
+        let fin: Document = db::get(&conn, fin.id).unwrap();
+        assert_eq!((fin.gross_total, fin.status.as_str(), fin.paid_at.is_some()), (dec!(0), "paid", true));
+        assert!(list(&conn, &DocumentFilter { status: "unpaid".into(), ..Default::default() }).unwrap().is_empty());
+    }
+
+    #[test]
+    fn negative_final_invoice_is_settled_by_refund() {
+        let (conn, bank) = setup();
+        let order = order_with_paid_partial(&conn, bank, dec!(100));
+        // The order is reduced after the Abschlag: the Schlussrechnung ends below zero.
+        let mut input = DocumentInput { doc: db::get(&conn, order).unwrap(), lines: vec![item(dec!(500))] };
+        input.doc.id = order;
+        update(&conn, order, input).unwrap();
+        let fin = finalize(&conn, create_final(&conn, order).unwrap()).unwrap().id;
+        let doc: Document = db::get(&conn, fin).unwrap();
+        assert_eq!((doc.gross_total, doc.status.as_str(), doc.remaining(), doc.money_sign()), (dec!(-595), "open", dec!(595), dec!(-1)));
+        assert_eq!(list(&conn, &DocumentFilter { status: "unpaid".into(), ..Default::default() }).unwrap().len(), 1);
+
+        finance::pay_document(&conn, fin, PaymentRequest { account_id: Some(bank), amount: dec!(595), ..Default::default() }).unwrap();
+        let doc: Document = db::get(&conn, fin).unwrap();
+        assert_eq!((doc.status.as_str(), doc.remaining()), ("paid", dec!(0)));
+        let money: Decimal = db::query::<crate::models::Transaction>(&conn, "", &[]).unwrap().iter().map(|t| t.amount).sum();
+        assert_eq!(money, dec!(1190) - dec!(595), "refund paid out");
+    }
 }

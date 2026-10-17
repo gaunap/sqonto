@@ -13,7 +13,7 @@ import { ListTable } from '@/components/ListTable';
 import { PaymentModal } from '@/components/PaymentModal';
 import { Page, PageHeader, StatusBadge, confirmAction } from '@/components/ui';
 import { exportCsv } from '@/lib/csv';
-import { receiptIncoming, receiptRemaining } from '@/lib/calc';
+import { documentIncoming, documentRemaining, receiptIncoming, receiptRemaining } from '@/lib/calc';
 import { date, money } from '@/lib/format';
 import { docLabel } from '@/lib/labels';
 
@@ -209,7 +209,7 @@ export function OpenItemsPage() {
                     width: 60,
                     render: (d) => (
                       <Tooltip label="Zahlung erfassen">
-                        <ActionIcon color="teal" variant="light" onClick={(e) => { e.stopPropagation(); setPaying({ kind: 'documents', id: d.id, open: d.open_amount, title: `Zahlung für ${d.number}` }); }} aria-label="Zahlung erfassen">
+                        <ActionIcon color="teal" variant="light" onClick={(e) => { e.stopPropagation(); setPaying({ kind: 'documents', id: d.id, open: documentRemaining(d, d.open_amount), title: `${documentIncoming(d) ? 'Zahlung' : 'Erstattung'} für ${d.number}`, incoming: documentIncoming(d) }); }} aria-label="Zahlung erfassen">
                           <IconCash size={16} />
                         </ActionIcon>
                       </Tooltip>

@@ -61,6 +61,7 @@ import type { DocumentFull, EinvoiceCheck, IdResponse, Pages } from '@/api/types
 import { PaymentModal } from '@/components/PaymentModal';
 import { PagesPreview } from '@/components/DocumentParts';
 import { InfoRow, Money, Page, PageHeader, SectionCard, StatusBadge, confirmAction } from '@/components/ui';
+import { documentIncoming, documentRemaining } from '@/lib/calc';
 import { date, dateTime, money, relativeDays } from '@/lib/format';
 import { isDesktop } from '@/lib/desktop';
 import { DOC_TYPES, docLabel, type DocType } from '@/lib/labels';
@@ -285,7 +286,10 @@ export function DocumentViewPage() {
   const label = docLabel(doc.doc_type, doc.kind);
   const isInvoice = doc.doc_type === 'invoice';
   const isInvoiceLike = isInvoice || doc.doc_type === 'credit_note';
-  const canPay = isInvoiceLike && data.open_amount > 0 && doc.status !== 'cancelled';
+  // Credit notes and negative invoices (Schlussrechnung below its Abschläge) are refunded.
+  const remaining = documentRemaining(doc, data.open_amount);
+  const refund = !documentIncoming(doc);
+  const canPay = isInvoiceLike && remaining > 0.005 && doc.status !== 'cancelled';
   const canPartial = (doc.doc_type === 'quote' || doc.doc_type === 'order') && doc.status !== 'rejected';
   const hasFinal = data.related.some((r) => r.relation === 'final' && r.status !== 'cancelled');
   const hasPartials = data.related.some((r) => r.relation === 'partial' && r.status !== 'cancelled' && r.status !== 'draft');
@@ -321,7 +325,7 @@ export function DocumentViewPage() {
           <>
             {canPay && (
               <Button leftSection={<IconCash size={16} />} onClick={() => setPayOpen(true)} color="teal">
-                {doc.doc_type === 'credit_note' ? 'Erstattung erfassen' : 'Zahlung erfassen'}
+                {refund ? 'Erstattung erfassen' : 'Zahlung erfassen'}
               </Button>
             )}
             {!isInvoiceLike && (
@@ -482,24 +486,24 @@ export function DocumentViewPage() {
                 <Group justify="space-between" align="flex-start">
                   <Box>
                     <Text size="sm" c="dimmed">
-                      {data.open_amount > 0 ? 'Offener Betrag' : 'Vollständig bezahlt'}
+                      {remaining > 0 ? (refund ? 'Offene Erstattung' : 'Offener Betrag') : 'Vollständig bezahlt'}
                     </Text>
-                    <Text fz={28} fw={700} className="tabular" c={data.open_amount > 0 ? (data.days_overdue > 0 ? 'red.7' : undefined) : 'teal.7'}>
-                      {money(data.open_amount)}
+                    <Text fz={28} fw={700} className="tabular" c={remaining > 0 ? (data.days_overdue > 0 ? 'red.7' : undefined) : 'teal.7'}>
+                      {money(remaining > 0 ? remaining : data.open_amount)}
                     </Text>
-                    {doc.due_date && data.open_amount > 0 && (
+                    {doc.due_date && remaining > 0 && (
                       <Text size="sm" c={data.days_overdue > 0 ? 'red.7' : 'dimmed'}>
                         fällig {date(doc.due_date)} ({relativeDays(doc.due_date)})
                       </Text>
                     )}
-                    {doc.paid_at && data.open_amount <= 0 && (
+                    {doc.paid_at && remaining <= 0 && (
                       <Text size="sm" c="dimmed">
                         bezahlt am {date(doc.paid_at)}
                       </Text>
                     )}
                   </Box>
-                  <ThemeIcon size={44} radius="xl" variant="light" color={data.open_amount > 0 ? (data.days_overdue > 0 ? 'red' : 'blue') : 'teal'}>
-                    {data.open_amount > 0 ? <IconCash size={22} /> : <IconCircleCheck size={22} />}
+                  <ThemeIcon size={44} radius="xl" variant="light" color={remaining > 0 ? (data.days_overdue > 0 ? 'red' : 'blue') : 'teal'}>
+                    {remaining > 0 ? <IconCash size={22} /> : <IconCircleCheck size={22} />}
                   </ThemeIcon>
                 </Group>
                 {doc.gross_total > 0 && (
@@ -684,10 +688,10 @@ export function DocumentViewPage() {
           onClose={() => setPayOpen(false)}
           target="documents"
           id={doc.id}
-          openAmount={data.open_amount}
+          openAmount={remaining}
           fees={data.dunning_fees}
-          incoming={doc.doc_type === 'invoice'}
-          title={`${doc.doc_type === 'credit_note' ? 'Erstattung' : 'Zahlung'} für ${label} ${doc.number}`}
+          incoming={!refund}
+          title={`${refund ? 'Erstattung' : 'Zahlung'} für ${label} ${doc.number}`}
         />
       )}
       {canPartial && <PartialModal opened={partialOpen} onClose={() => setPartialOpen(false)} doc={data} />}

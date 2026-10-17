@@ -136,3 +136,14 @@ export function receiptIncoming(r: Pick<Receipt, 'receipt_type' | 'gross_total'>
 export function receiptRemaining(r: Pick<Receipt, 'gross_total'>, openAmount: number) {
   return openAmount * Math.sign(r.gross_total);
 }
+
+// Mirrors Document::money_sign / remaining: credit notes and invoices with a negative total
+// (Schlussrechnung below its Abschläge) are settled by a refund.
+export function documentIncoming(d: Pick<Document, 'doc_type' | 'gross_total'>) {
+  return (d.doc_type === 'credit_note') === d.gross_total < 0;
+}
+
+/** Amount still to be paid or refunded – positive while the document is open. */
+export function documentRemaining(d: Pick<Document, 'gross_total'>, openAmount: number) {
+  return openAmount * Math.sign(d.gross_total);
+}
