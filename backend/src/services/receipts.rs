@@ -8,6 +8,7 @@ use anyhow::Result;
 use chrono::NaiveDate;
 use rusqlite::Connection;
 use rust_decimal::Decimal;
+use rust_decimal::prelude::Signed;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -215,9 +216,10 @@ pub fn recompute_paid(conn: &Connection, id: i64) -> Result<()> {
     let Some(mut r) = db::find::<Receipt>(conn, id)? else { return Ok(()) };
     let allocs = db::query::<Allocation>(conn, "WHERE receipt_id = ?1", &[v(id)])?;
     r.paid_total = allocs.iter().map(|a| a.amount).sum::<Decimal>() * r.sign();
-    r.status = if r.gross_total.abs() > Decimal::ZERO && r.paid_total >= r.gross_total {
+    // Supplier credit notes have negative totals and are settled by a refund.
+    r.status = if r.remaining() <= Decimal::ZERO {
         "paid".into()
-    } else if r.paid_total > Decimal::ZERO {
+    } else if r.paid_total.signum() == r.gross_total.signum() && !r.paid_total.is_zero() {
         "partial".into()
     } else {
         "open".into()
@@ -276,7 +278,7 @@ pub fn create(conn: &Connection, input: ReceiptInput) -> Result<i64> {
         && (p.account_id.is_some() || p.transaction_id.is_some())
     {
         if p.amount.is_zero() {
-            p.amount = receipt.gross_total;
+            p.amount = receipt.gross_total.abs();
         }
         if p.date.is_none() {
             p.date = Some(receipt.date);
@@ -313,7 +315,7 @@ pub fn update(conn: &Connection, id: i64, input: ReceiptInput) -> Result<()> {
     {
         let r: Receipt = db::get(conn, id)?;
         if p.amount.is_zero() {
-            p.amount = r.open_amount();
+            p.amount = r.remaining();
         }
         if p.amount > Decimal::ZERO {
             finance::pay_receipt(conn, id, p)?;
@@ -359,4 +361,79 @@ pub fn suggest_account(conn: &Connection, contact_id: Option<i64>, name: &str) -
         None
     };
     Ok(row.map(|(a, t)| (a, t.parse().unwrap_or_default())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::Transaction;
+    use crate::services::finance::{self, PaymentRequest, TransactionInput};
+    use crate::services::reports;
+    use crate::util::ymd;
+    use rust_decimal_macros::dec;
+
+    fn setup() -> (Connection, i64) {
+        let conn = db::open_memory();
+        cfg::ensure_seeded(&conn).unwrap();
+        let bank = finance::save_account(&conn, PaymentAccount { name: "Bank".into(), opening_date: ymd(2026, 1, 1), ..Default::default() }).unwrap();
+        (conn, bank)
+    }
+
+    fn receipt(conn: &Connection, net: Decimal) -> i64 {
+        let receipt = Receipt { supplier_name: "Lieferant GmbH".into(), receipt_type: "expense".into(), date: ymd(2026, 3, 1), prices_gross: false, ..Default::default() };
+        let lines = vec![ReceiptLine { account: "4930".into(), net, tax_rate: dec!(19), ..Default::default() }];
+        create(conn, ReceiptInput { receipt, lines, payment: None }).unwrap()
+    }
+
+    #[test]
+    fn supplier_credit_note_is_settled_by_refund() {
+        let (conn, bank) = setup();
+        let id = receipt(&conn, dec!(-100));
+        let r: Receipt = db::get(&conn, id).unwrap();
+        assert_eq!((r.gross_total, r.remaining(), r.money_sign()), (dec!(-119), dec!(119), dec!(1)));
+        let open = reports::open_items(&conn).unwrap();
+        assert_eq!((open.payables.len(), open.payables_total), (1, dec!(-119)), "open credit note reduces payables");
+
+        // The incoming refund is suggested for the credit note …
+        let tx = Transaction { account_id: bank, date: ymd(2026, 3, 5), amount: dec!(119), counterparty: "Lieferant GmbH".into(), source: "import".into(), ..Default::default() };
+        let tx = finance::create(&conn, TransactionInput { tx, allocations: vec![] }).unwrap();
+        let sug = finance::suggestions(&conn, tx).unwrap();
+        assert!(sug.iter().any(|s| s.kind == "receipt" && s.id == id && s.open_amount == dec!(119)), "{sug:?}");
+
+        // … and settles it.
+        finance::pay_receipt(&conn, id, PaymentRequest { transaction_id: Some(tx), amount: dec!(119), ..Default::default() }).unwrap();
+        let r: Receipt = db::get(&conn, id).unwrap();
+        assert_eq!((r.status.as_str(), r.remaining()), ("paid", dec!(0)));
+        assert!(reports::open_items(&conn).unwrap().payables.is_empty());
+        // EÜR: the Vorsteuer correction is booked with the refund.
+        assert_eq!(reports::ustva(&conn, 2026, "Q1").unwrap().input_tax, dec!(-19));
+        assert!(finance::pay_receipt(&conn, id, PaymentRequest { account_id: Some(bank), amount: dec!(1), ..Default::default() }).is_err());
+    }
+
+    #[test]
+    fn credit_note_saved_as_refunded() {
+        let (conn, bank) = setup();
+        let receipt = Receipt { supplier_name: "Lieferant GmbH".into(), receipt_type: "expense".into(), date: ymd(2026, 3, 1), prices_gross: true, ..Default::default() };
+        let lines = vec![ReceiptLine { account: "4930".into(), gross: dec!(-59.50), tax_rate: dec!(19), ..Default::default() }];
+        let payment = Some(PaymentRequest { account_id: Some(bank), ..Default::default() });
+        let id = create(&conn, ReceiptInput { receipt, lines, payment }).unwrap();
+        let r: Receipt = db::get(&conn, id).unwrap();
+        assert_eq!(r.status, "paid");
+        let money: Decimal = db::query::<Transaction>(&conn, "", &[]).unwrap().iter().map(|t| t.amount).sum();
+        assert_eq!(money, dec!(59.50), "refund received");
+    }
+
+    #[test]
+    fn invoice_receipt_is_paid_out() {
+        let (conn, bank) = setup();
+        let id = receipt(&conn, dec!(100));
+        finance::pay_receipt(&conn, id, PaymentRequest { account_id: Some(bank), amount: dec!(50), date: Some(ymd(2026, 3, 10)), ..Default::default() }).unwrap();
+        assert_eq!(db::get::<Receipt>(&conn, id).unwrap().status, "partial");
+        finance::pay_receipt(&conn, id, PaymentRequest { account_id: Some(bank), amount: dec!(69), date: Some(ymd(2026, 3, 20)), ..Default::default() }).unwrap();
+        let r: Receipt = db::get(&conn, id).unwrap();
+        assert_eq!((r.status.as_str(), r.paid_total), ("paid", dec!(119)));
+        let money: Decimal = db::query::<Transaction>(&conn, "", &[]).unwrap().iter().map(|t| t.amount).sum();
+        assert_eq!(money, dec!(-119));
+        assert_eq!(reports::ustva(&conn, 2026, "Q1").unwrap().input_tax, dec!(19));
+    }
 }

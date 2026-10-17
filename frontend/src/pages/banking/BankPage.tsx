@@ -63,6 +63,7 @@ import type {
 import { AccountSelect, DateField, MoneyInput } from '@/components/inputs';
 import { ListTable } from '@/components/ListTable';
 import { Empty, Page, PageHeader, confirmAction } from '@/components/ui';
+import { receiptIncoming, receiptRemaining } from '@/lib/calc';
 import { date, formatIban, money, r2, today } from '@/lib/format';
 import { TAX_RATES } from '@/lib/labels';
 
@@ -407,9 +408,10 @@ function AssignDrawer({ tx, onClose }: { tx: TransactionView | null; onClose: ()
       .filter((d) => !s || `${d.number} ${d.contact_name} ${d.open_amount}`.toLowerCase().includes(s))
       .map((d) => ({ kind: 'document' as const, id: d.id, label: `${d.number} · ${d.contact_name}`, open: d.open_amount, date: d.date }));
     const recs = (openReceipts ?? [])
-      .filter((r) => (incoming ? r.receipt.receipt_type === 'income' : r.receipt.receipt_type === 'expense') && r.open_amount > 0)
-      .filter((r) => !s || `${r.receipt.number} ${r.receipt.invoice_number} ${r.party} ${r.open_amount}`.toLowerCase().includes(s))
-      .map((r) => ({ kind: 'receipt' as const, id: r.receipt.id, label: `Beleg ${r.receipt.number} · ${r.party}`, open: r.open_amount, date: r.receipt.date }));
+      // Supplier credit notes are settled by incoming money.
+      .filter((r) => receiptIncoming(r.receipt) === incoming && receiptRemaining(r.receipt, r.open_amount) > 0)
+      .filter((r) => !s || `${r.receipt.number} ${r.receipt.invoice_number} ${r.party} ${Math.abs(r.open_amount)}`.toLowerCase().includes(s))
+      .map((r) => ({ kind: 'receipt' as const, id: r.receipt.id, label: `${r.receipt.gross_total < 0 ? 'Gutschrift' : 'Beleg'} ${r.receipt.number} · ${r.party}`, open: receiptRemaining(r.receipt, r.open_amount), date: r.receipt.date }));
     return [...docs, ...recs].slice(0, 12);
   })();
 

@@ -13,6 +13,7 @@ import { ListTable } from '@/components/ListTable';
 import { PaymentModal } from '@/components/PaymentModal';
 import { Page, PageHeader, StatusBadge, confirmAction } from '@/components/ui';
 import { exportCsv } from '@/lib/csv';
+import { receiptIncoming, receiptRemaining } from '@/lib/calc';
 import { date, money } from '@/lib/format';
 import { docLabel } from '@/lib/labels';
 
@@ -59,7 +60,7 @@ export function OpenItemsPage() {
   const [bucket, setBucket] = useState<string | null>(null);
   const [pBucket, setPBucket] = useState<string | null>(null);
   const [selected, setSelected] = useState<DocumentListItem[]>([]);
-  const [paying, setPaying] = useState<{ kind: 'documents' | 'receipts'; id: number; open: number; title: string; fees?: number } | null>(null);
+  const [paying, setPaying] = useState<{ kind: 'documents' | 'receipts'; id: number; open: number; title: string; fees?: number; incoming?: boolean } | null>(null);
 
   const receivables = useMemo(() => (data?.receivables ?? []).filter((d) => inBucket(d.days_overdue, bucket)), [data, bucket]);
   const payables = useMemo(
@@ -236,14 +237,23 @@ export function OpenItemsPage() {
                   { accessor: 'receipt.date', title: 'Datum', sortable: true, render: (r) => date(r.receipt.date) },
                   { accessor: 'receipt.due_date', title: 'Fällig', sortable: true, render: (r) => <Text size="sm" c={r.overdue ? 'red.7' : undefined}>{date(r.receipt.due_date)}</Text> },
                   { accessor: 'receipt.status', title: 'Status', render: (r) => <StatusBadge status={r.receipt.status} docType="invoice" daysOverdue={r.overdue ? 1 : 0} size="sm" /> },
-                  { accessor: 'open_amount', title: 'Offen', sortable: true, textAlign: 'right', render: (r) => <Text size="sm" fw={600} className="tabular">{money(r.open_amount)}</Text> },
+                  { accessor: 'open_amount', title: 'Offen', sortable: true, textAlign: 'right', render: (r) => <Text size="sm" fw={600} className="tabular" c={r.open_amount < 0 ? 'grape.7' : undefined}>{money(r.open_amount)}</Text> },
                   {
                     accessor: 'pay',
                     title: '',
                     width: 60,
                     render: (r) => (
-                      <Tooltip label="Als bezahlt erfassen">
-                        <ActionIcon color="teal" variant="light" onClick={(e) => { e.stopPropagation(); setPaying({ kind: 'receipts', id: r.receipt.id, open: r.open_amount, title: `Zahlung für Beleg ${r.receipt.number}` }); }} aria-label="Bezahlen">
+                      <Tooltip label={r.open_amount < 0 ? 'Erstattung erfassen' : 'Als bezahlt erfassen'}>
+                        <ActionIcon
+                          color="teal"
+                          variant="light"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const refund = r.receipt.gross_total < 0;
+                            setPaying({ kind: 'receipts', id: r.receipt.id, open: receiptRemaining(r.receipt, r.open_amount), title: `${refund ? 'Erstattung' : 'Zahlung'} für Beleg ${r.receipt.number}`, incoming: receiptIncoming(r.receipt) });
+                          }}
+                          aria-label="Bezahlen"
+                        >
                           <IconCash size={16} />
                         </ActionIcon>
                       </Tooltip>
@@ -337,7 +347,7 @@ export function OpenItemsPage() {
         </Tabs.Panel>
       </Tabs>
       {paying && (
-        <PaymentModal opened={!!paying} onClose={() => setPaying(null)} target={paying.kind} id={paying.id} openAmount={paying.open} title={paying.title} incoming={paying.kind === 'documents'} />
+        <PaymentModal opened={!!paying} onClose={() => setPaying(null)} target={paying.kind} id={paying.id} openAmount={paying.open} title={paying.title} incoming={paying.incoming ?? paying.kind === 'documents'} />
       )}
     </Page>
   );

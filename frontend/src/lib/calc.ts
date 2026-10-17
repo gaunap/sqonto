@@ -3,7 +3,7 @@
 // See LICENSE in the project root for the full license and warranty disclaimer.
 
 // Client-side mirror of backend/src/services/calc.rs for instant totals in the editor.
-import type { Document, DocumentLine, TaxGroup, Totals } from '@/api/types';
+import type { Document, DocumentLine, Receipt, TaxGroup, Totals } from '@/api/types';
 import { r2 } from './format';
 
 export function effectiveRate(doc: Pick<Document, 'tax_mode'>, line: Pick<DocumentLine, 'tax_rate'>) {
@@ -124,4 +124,15 @@ export function calculate(doc: Pick<Document, 'tax_mode' | 'prices_gross'>, line
       gross: r2(net + tax),
     },
   };
+}
+
+// Mirrors Receipt::money_sign / remaining: supplier credit notes (negative receipts) are settled
+// by money received, like income receipts.
+export function receiptIncoming(r: Pick<Receipt, 'receipt_type' | 'gross_total'>) {
+  return (r.receipt_type === 'income') !== (r.gross_total < 0);
+}
+
+/** Amount still to be paid or refunded – positive while the receipt is open. */
+export function receiptRemaining(r: Pick<Receipt, 'gross_total'>, openAmount: number) {
+  return openAmount * Math.sign(r.gross_total);
 }

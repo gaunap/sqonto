@@ -52,6 +52,7 @@ import type { AccountSuggestion, Contact, FileMeta, ImportResult, ParsedInvoice,
 import { AccountSelect, ContactSelect, DateField, MoneyInput } from '@/components/inputs';
 import { PaymentModal } from '@/components/PaymentModal';
 import { Page, PageHeader, StatusBadge, UnsavedChangesGuard, confirmAction } from '@/components/ui';
+import { receiptIncoming, receiptRemaining } from '@/lib/calc';
 import { date, money, r2, today } from '@/lib/format';
 import { isDesktop } from '@/lib/desktop';
 import { RECEIPT_TAX_MODES, TAX_RATES } from '@/lib/labels';
@@ -387,6 +388,9 @@ export function ReceiptEditorPage() {
   const patch = (p: Partial<Receipt>) => setReceipt((r) => (r ? { ...r, ...p } : r));
   const patchLine = (i: number, p: Partial<ReceiptLine>) => setLines((ls) => ls.map((l, j) => (j === i ? { ...l, ...p } : l)));
   const isIncome = receipt.receipt_type === 'income';
+  // Supplier credit notes (negative receipts) are settled by a refund.
+  const remaining = full ? receiptRemaining(full.receipt, full.open_amount) : 0;
+  const refund = !!full && full.receipt.gross_total < 0;
   const accountKind = (n: string) => chart?.find((a) => a.number === n)?.kind;
 
   const onSupplier = async (cid: number | null, contactName?: string) => {
@@ -415,9 +419,9 @@ export function ReceiptEditorPage() {
                 Löschen
               </Button>
             )}
-            {!isNew && full && full.open_amount > 0 && (
+            {!isNew && remaining > 0.005 && (
               <Button variant="light" color="teal" leftSection={<IconCash size={16} />} onClick={() => setPayOpen(true)}>
-                Zahlung erfassen
+                {refund ? 'Erstattung erfassen' : 'Zahlung erfassen'}
               </Button>
             )}
             {isNew && (
@@ -599,7 +603,7 @@ export function ReceiptEditorPage() {
                 <Stack gap="xs">
                   {(full?.payments ?? []).length === 0 && (
                     <Text size="sm" c="dimmed">
-                      Noch keine Zahlung zugeordnet. Offen: {money(full?.open_amount ?? 0)}
+                      Noch keine {refund ? 'Erstattung' : 'Zahlung'} zugeordnet. Offen: {money(remaining)}
                     </Text>
                   )}
                   {(full?.payments ?? []).map((p) => (
@@ -617,9 +621,9 @@ export function ReceiptEditorPage() {
                       </Group>
                     </Group>
                   ))}
-                  {full && full.open_amount > 0 && (
+                  {remaining > 0.005 && (
                     <Button variant="light" size="xs" w="fit-content" onClick={() => setPayOpen(true)}>
-                      Zahlung erfassen
+                      {refund ? 'Erstattung erfassen' : 'Zahlung erfassen'}
                     </Button>
                   )}
                 </Stack>
@@ -647,9 +651,9 @@ export function ReceiptEditorPage() {
           }}
           target="receipts"
           id={full.receipt.id}
-          openAmount={full.open_amount}
-          incoming={isIncome}
-          title={`Zahlung für Beleg ${full.receipt.number}`}
+          openAmount={remaining}
+          incoming={receiptIncoming(full.receipt)}
+          title={`${refund ? 'Erstattung' : 'Zahlung'} für Beleg ${full.receipt.number}`}
         />
       )}
       <UnsavedChangesGuard when={dirty} onSave={() => save.mutateAsync({ leaving: true })} />

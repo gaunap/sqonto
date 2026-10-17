@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
 use rust_decimal::Decimal;
+use rust_decimal::prelude::Signed;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -545,6 +546,15 @@ impl Receipt {
     }
     pub fn open_amount(&self) -> Decimal {
         self.gross_total - self.paid_total
+    }
+    /// Direction of the money that settles the receipt: +1 if it is received (income, supplier
+    /// credit note), -1 if it is paid out.
+    pub fn money_sign(&self) -> Decimal {
+        self.sign() * self.gross_total.signum()
+    }
+    /// Amount still to be paid or refunded – positive while the receipt is open.
+    pub fn remaining(&self) -> Decimal {
+        self.open_amount() * self.gross_total.signum()
     }
 }
 

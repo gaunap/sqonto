@@ -556,10 +556,12 @@ pub fn pay_receipt(conn: &Connection, receipt_id: i64, req: PaymentRequest) -> R
     if amount <= Decimal::ZERO {
         bail_user!("Bitte einen positiven Betrag angeben.");
     }
-    if amount > r.open_amount() + Decimal::new(1, 2) {
-        bail_user!("Der Betrag übersteigt den offenen Betrag von {}.", fmt_money(r.open_amount()));
+    if amount > r.remaining() + Decimal::new(1, 2) {
+        bail_user!("Der Betrag übersteigt den offenen Betrag von {}.", fmt_money(r.remaining().max(Decimal::ZERO)));
     }
-    let alloc = Allocation { kind: "receipt".into(), receipt_id: Some(receipt_id), amount: r.sign() * amount, date, ..Default::default() };
+    // Paid out for invoices, received for supplier credit notes.
+    let money = r.money_sign() * amount;
+    let alloc = Allocation { kind: "receipt".into(), receipt_id: Some(receipt_id), amount: money, date, ..Default::default() };
     match req.transaction_id {
         Some(tid) => {
             let tx: Transaction = db::get(conn, tid)?;
@@ -572,7 +574,7 @@ pub fn pay_receipt(conn: &Connection, receipt_id: i64, req: PaymentRequest) -> R
             let tx = Transaction {
                 account_id,
                 date,
-                amount: r.sign() * amount,
+                amount: money,
                 counterparty: receipts::party_name(conn, &r)?,
                 purpose: if r.invoice_number.is_empty() { r.description.clone() } else { format!("Rechnung {}", r.invoice_number) },
                 source: "payment".into(),
@@ -680,9 +682,15 @@ pub fn suggestions(conn: &Connection, tx_id: i64) -> Result<Vec<MatchSuggestion>
                 });
             }
         }
-        for r in db::query::<Receipt>(conn, "WHERE status IN ('open','partial') AND receipt_type = 'expense'", &[])? {
-            let open = r.open_amount();
-            if open <= Decimal::ZERO {
+    }
+    // Receipts in the direction of their open money: invoices are paid out, supplier credit notes
+    // and income receipts are received.
+    let (incoming, outgoing) = (rest > Decimal::ZERO || tx.amount > Decimal::ZERO, rest < Decimal::ZERO || tx.amount < Decimal::ZERO);
+    {
+        for r in db::query::<Receipt>(conn, "WHERE status IN ('open','partial')", &[])? {
+            let open = r.remaining();
+            let receives = r.money_sign() > Decimal::ZERO;
+            if open <= Decimal::ZERO || (receives && !incoming) || (!receives && !outgoing) {
                 continue;
             }
             let mut score = 0;

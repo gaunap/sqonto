@@ -980,7 +980,8 @@ pub fn open_items(conn: &Connection) -> Result<OpenItems> {
     receivables.sort_by_key(|d| (d.due_date, d.id));
     let payables: Vec<ReceiptListItem> = receipts::list(conn, &ReceiptFilter { status: "unpaid".into(), ..Default::default() })?
         .into_iter()
-        .filter(|r| r.open_amount > Decimal::ZERO)
+        // Open supplier credit notes (negative) are listed too and reduce the total.
+        .filter(|r| r.receipt.remaining() > Decimal::ZERO)
         .collect();
     let t = today();
     let rb: Vec<(i64, Decimal)> = receivables
@@ -990,6 +991,7 @@ pub fn open_items(conn: &Connection) -> Result<OpenItems> {
         .collect();
     let pb: Vec<(i64, Decimal)> = payables
         .iter()
+        .filter(|r| r.open_amount > Decimal::ZERO)
         .map(|r| (r.receipt.due_date.map(|x| (t - x).num_days()).unwrap_or(0), r.open_amount))
         .collect();
     Ok(OpenItems {
