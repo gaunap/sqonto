@@ -4,8 +4,8 @@
 
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { Badge, Button, Card, Group, Modal, Select, SimpleGrid, Stack, Switch, Text, TextInput, Textarea } from '@mantine/core';
-import { IconPlus, IconSearch } from '@tabler/icons-react';
+import { ActionIcon, Badge, Button, Card, Group, Modal, Select, SimpleGrid, Stack, Switch, Text, TextInput, Textarea, Tooltip } from '@mantine/core';
+import { IconEdit, IconPlus, IconSearch } from '@tabler/icons-react';
 import { api } from '@/api/client';
 import { useAction, useChart, useStatus } from '@/api/hooks';
 import type { Account } from '@/api/types';
@@ -238,14 +238,21 @@ export function AccountsPage() {
             pageSize={50}
             onRowClick={(a) => navigate(`/buchhaltung/konten/${a.number}`)}
             columns={[
-              { accessor: 'number', title: 'Konto', sortable: true, width: 90, render: (a) => <Text size="sm" fw={700}>{a.number}</Text> },
+              { accessor: 'number', title: 'Konto', sortable: true, width: 90, render: (a) => <Text size="sm" fw={700} className="tabular">{a.number}</Text> },
               {
                 accessor: 'name',
                 title: 'Bezeichnung',
                 sortable: true,
                 render: (a) => (
                   <div>
-                    <Text size="sm">{a.name}</Text>
+                    <Group gap={6} wrap="nowrap">
+                      <Text size="sm" c={a.active ? undefined : 'dimmed'}>
+                        {a.name}
+                      </Text>
+                      {a.system && <Badge size="xs" variant="outline">System</Badge>}
+                      {a.datev_auto && <Badge size="xs" variant="outline" color="violet">Automatik</Badge>}
+                      {!a.active && <Badge size="xs" color="gray">inaktiv</Badge>}
+                    </Group>
                     {a.hint && (
                       <Text size="xs" c="dimmed">
                         {a.hint}
@@ -254,28 +261,19 @@ export function AccountsPage() {
                   </div>
                 ),
               },
-              { accessor: 'kind', title: 'Art', sortable: true, width: 160, render: (a) => <Badge variant="light" color="gray">{ACCOUNT_KINDS[a.kind] ?? a.kind}</Badge> },
-              { accessor: 'tax_rate', title: 'USt', width: 70, render: (a) => (a.tax_rate != null ? `${a.tax_rate} %` : '') },
-              {
-                accessor: 'flags',
-                title: '',
-                width: 170,
-                render: (a) => (
-                  <Group gap={4}>
-                    {a.system && <Badge size="xs" variant="outline">System</Badge>}
-                    {a.datev_auto && <Badge size="xs" variant="outline" color="violet">Automatik</Badge>}
-                    {!a.active && <Badge size="xs" color="gray">inaktiv</Badge>}
-                  </Group>
-                ),
-              },
+              { accessor: 'kind', title: 'Art', sortable: true, width: 170, render: (a) => <Badge variant="light" color="gray">{ACCOUNT_KINDS[a.kind] ?? a.kind}</Badge> },
+              { accessor: 'tax_rate', title: 'USt', sortable: true, width: 80, textAlign: 'right', render: (a) => <Text size="sm" className="tabular">{a.tax_rate != null ? `${a.tax_rate} %` : '–'}</Text> },
               {
                 accessor: 'edit',
                 title: '',
-                width: 90,
+                width: 60,
+                textAlign: 'right',
                 render: (a) => (
-                  <Button size="compact-xs" variant="subtle" onClick={(e) => { e.stopPropagation(); setModal({ open: true, account: a }); }}>
-                    Bearbeiten
-                  </Button>
+                  <Tooltip label="Bearbeiten">
+                    <ActionIcon onClick={(e) => { e.stopPropagation(); setModal({ open: true, account: a }); }} aria-label="Konto bearbeiten">
+                      <IconEdit size={16} />
+                    </ActionIcon>
+                  </Tooltip>
                 ),
               },
             ]}
