@@ -22,11 +22,20 @@ fn q(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\"\"").chars().take(60).collect::<String>())
 }
 
+/// Belegfeld 1 only allows a–z, A–Z, 0–9 and $ & % * + - / with at most 36 characters.
+fn belegfeld(s: &str) -> String {
+    s.chars().filter(|c| c.is_ascii_alphanumeric() || "$&%*+-/".contains(*c)).take(36).collect()
+}
+
 fn amount(d: Decimal) -> String {
     format!("{:.2}", d.abs()).replace('.', ",")
 }
 
 pub fn export(conn: &Connection, from: NaiveDate, to: NaiveDate, advisor: &str, client: &str) -> Result<Vec<u8>> {
+    // A Buchungsstapel belongs to one fiscal year; its Belegdatum carries no year.
+    if from > to || from.year() != to.year() {
+        crate::bail_user!("Der DATEV-Export ist nur innerhalb eines Wirtschaftsjahres möglich. Bitte einen Zeitraum innerhalb eines Kalenderjahres wählen.");
+    }
     let s = cfg::load(conn)?;
     let accounts: HashMap<String, crate::models::Account> = cfg::accounts(conn)?.into_iter().map(|a| (a.number.clone(), a)).collect();
     let skr = if s.tax.chart == "SKR04" { "04" } else { "03" };
@@ -109,7 +118,7 @@ pub fn export(conn: &Connection, from: NaiveDate, to: NaiveDate, advisor: &str, 
                 acc,
                 if bu.is_empty() { String::new() } else { q(bu) },
                 e.date.format("%d%m"),
-                q(&e.doc_ref.chars().take(36).collect::<String>()),
+                q(&belegfeld(&e.doc_ref)),
                 q(&e.description)
             ));
         }
@@ -192,6 +201,17 @@ mod tests {
 
     fn r(amount: &str, sh: &str, konto: &str, gegen: &str, bu: &str) -> (String, String, String, String, String) {
         (amount.into(), sh.into(), konto.into(), gegen.into(), bu.into())
+    }
+
+    #[test]
+    fn belegfeld_and_period_are_valid_for_datev() {
+        assert_eq!(belegfeld("Kasse 12"), "Kasse12");
+        assert_eq!(belegfeld("RE-2026-0001"), "RE-2026-0001");
+        assert_eq!(belegfeld("Beleg_Nr.7 (Ü)"), "BelegNr7");
+        assert_eq!(belegfeld(&"X".repeat(50)).len(), 36);
+        let conn = setup();
+        assert!(export(&conn, ymd(2025, 12, 1), ymd(2026, 1, 31), "", "").is_err(), "two fiscal years");
+        assert!(export(&conn, ymd(2026, 3, 1), ymd(2026, 2, 1), "", "").is_err(), "reversed range");
     }
 
     #[test]
