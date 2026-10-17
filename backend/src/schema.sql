@@ -325,6 +325,16 @@ CREATE TABLE IF NOT EXISTS journal_lines (
 CREATE INDEX IF NOT EXISTS idx_journal_lines_entry ON journal_lines(entry_id);
 CREATE INDEX IF NOT EXISTS idx_journal_lines_account ON journal_lines(account);
 
+-- Files of issued invoices / credit notes as issued (GoBD): pdf | pages | zugferd | xrechnung
+CREATE TABLE IF NOT EXISTS document_archive (
+  id          INTEGER PRIMARY KEY,
+  document_id INTEGER NOT NULL REFERENCES documents(id),
+  kind        TEXT NOT NULL,
+  file_id     INTEGER NOT NULL REFERENCES files(id),
+  created_at  TEXT NOT NULL DEFAULT '',
+  UNIQUE(document_id, kind)
+);
+
 CREATE TABLE IF NOT EXISTS dunnings (
   id          INTEGER PRIMARY KEY,
   document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,

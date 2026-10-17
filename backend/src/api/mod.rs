@@ -203,6 +203,18 @@ pub async fn render_pdf(st: &AppState, job: RenderJob, pdfa: bool) -> Result<Vec
     .map_err(AppError::from)
 }
 
+/// Compiles a render job once to PDF and SVG pages (identical content for download and preview).
+pub async fn render_pdf_and_svgs(st: &AppState, job: RenderJob, pdfa: bool) -> Result<(Vec<u8>, Vec<String>), AppError> {
+    let st = st.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<(Vec<u8>, Vec<String>)> {
+        let doc = st.pdf.compile(job.source, job.files)?;
+        Ok((st.pdf.pdf(&doc, pdfa)?, st.pdf.svgs(&doc)))
+    })
+    .await
+    .map_err(|e| AppError::from(anyhow::anyhow!(e)))?
+    .map_err(AppError::from)
+}
+
 /// Compiles a render job to SVG pages.
 pub async fn render_svgs(st: &AppState, job: RenderJob) -> Result<Vec<String>, AppError> {
     let st = st.clone();

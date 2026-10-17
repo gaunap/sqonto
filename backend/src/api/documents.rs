@@ -12,18 +12,19 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::{IdResponse, MessageResponse, Pages, file_response, render_pdf, render_svgs, safe_filename};
+use super::{IdResponse, MessageResponse, Pages, file_response, render_pdf, render_pdf_and_svgs, render_svgs, safe_filename};
 use crate::db;
 use crate::error::{ApiResult, AppError};
-use crate::models::{Document, Dunning};
+use crate::models::{Document, Dunning, FileMeta};
 use crate::pdf::data;
+use crate::services::archive;
 use crate::services::calc::{self, Totals};
 use crate::services::documents::{self as docs, DocumentFilter, DocumentFull, DocumentInput, DocumentListItem, PartialRequest};
 use crate::services::dunning::{self, DunningListItem, DunningRequest, DunningSuggestion};
 use crate::services::einvoice::{self, EinvoiceCheck};
 use crate::services::finance::{self, PaymentRequest};
 use crate::state::AppState;
-use crate::util::today;
+use crate::util::{now_str, today};
 
 pub async fn list(State(st): State<AppState>, Query(f): Query<DocumentFilter>) -> ApiResult<Vec<DocumentListItem>> {
     st.read(|c| docs::list(c, &f)).map(Json)
@@ -83,12 +84,21 @@ pub async fn delete(State(st): State<AppState>, Path(id): Path<i64>) -> ApiResul
     st.write(|c| docs::delete(c, id)).map(|_| Json(MessageResponse { message: "Dokument gelöscht".into() }))
 }
 
+/// Archives an issued document right away; a failure is retried on its first download or view.
+async fn archive_now(st: &AppState, id: i64) {
+    let doc = match st.read(|c| db::get::<Document>(c, id)) {
+        Ok(d) if archive::is_issued(&d) => d,
+        _ => return,
+    };
+    if let Err(e) = ensure_issued(st, &doc).await {
+        tracing::warn!("{} konnte nicht archiviert werden: {}", doc.number, e.message);
+    }
+}
+
 pub async fn finalize(State(st): State<AppState>, Path(id): Path<i64>) -> ApiResult<DocumentFull> {
-    st.write(|c| {
-        docs::finalize(c, id)?;
-        docs::get_full(c, id)
-    })
-    .map(Json)
+    st.write(|c| docs::finalize(c, id))?;
+    archive_now(&st, id).await;
+    st.read(|c| docs::get_full(c, id)).map(Json)
 }
 
 #[derive(Deserialize, TS)]
@@ -134,7 +144,9 @@ pub async fn convert(State(st): State<AppState>, Path(id): Path<i64>, Json(r): J
 }
 
 pub async fn cancel(State(st): State<AppState>, Path(id): Path<i64>) -> ApiResult<IdResponse> {
-    st.write(|c| docs::cancel(c, id)).map(|id| Json(IdResponse { id }))
+    let storno = st.write(|c| docs::cancel(c, id))?;
+    archive_now(&st, storno).await;
+    Ok(Json(IdResponse { id: storno }))
 }
 
 pub async fn credit_note(State(st): State<AppState>, Path(id): Path<i64>) -> ApiResult<IdResponse> {
@@ -191,64 +203,166 @@ pub struct PdfQ {
     download: bool,
 }
 
-async fn zugferd_bytes(st: &AppState, id: i64) -> Result<(Vec<u8>, Document), AppError> {
-    let (job, doc) = st.read(|c| {
-        let doc: Document = db::get(c, id)?;
-        let check = einvoice::check(c, &doc, false)?;
+/// ZUGFeRD PDF/A-3 (with embedded factur-x.xml) and its pages, rendered from current data.
+async fn zugferd_render(st: &AppState, doc: &Document) -> Result<(Vec<u8>, Vec<String>), AppError> {
+    let job = st.read(|c| {
+        let check = einvoice::check(c, doc, false)?;
         if !check.errors.is_empty() {
             return Err(crate::error::UserError(format!("ZUGFeRD nicht möglich: {}", check.errors.join(" "))).into());
         }
-        let xml = einvoice::generate_cii(c, &doc, einvoice::GUIDELINE_EN16931)?;
-        let lines = docs::lines_of(c, id)?;
-        let mut job = data::document_job(c, &st.data_dir, &doc, &lines, None)?;
+        let xml = einvoice::generate_cii(c, doc, einvoice::GUIDELINE_EN16931)?;
+        let lines = docs::lines_of(c, doc.id)?;
+        let mut job = data::document_job(c, &st.data_dir, doc, &lines, None)?;
         job.attach("factur-x.xml", xml.into_bytes());
-        Ok((job, doc))
+        Ok(job)
     })?;
-    let pdf = render_pdf(st, job, true).await?;
-    let pdf = einvoice::add_facturx_xmp(&pdf).map_err(AppError::from)?;
-    Ok((pdf, doc))
+    let (pdf, pages) = render_pdf_and_svgs(st, job, true).await?;
+    Ok((einvoice::add_facturx_xmp(&pdf).map_err(AppError::from)?, pages))
+}
+
+/// Renders an issued document as it is archived: the ZUGFeRD PDF if that is its format (a plain
+/// PDF if the e-invoice data is incomplete), otherwise a plain PDF. Returns (pdf, pages, zugferd).
+async fn render_issued(st: &AppState, doc: &Document) -> Result<(Vec<u8>, Vec<String>, bool), AppError> {
+    if doc.einvoice_format == "zugferd" {
+        match zugferd_render(st, doc).await {
+            Ok((pdf, pages)) => return Ok((pdf, pages, true)),
+            Err(e) => tracing::warn!("{}: ZUGFeRD nicht möglich, archiviere PDF ohne E-Rechnung ({})", doc.number, e.message),
+        }
+    }
+    let job = st.read(|c| data::document_job(c, &st.data_dir, doc, &docs::lines_of(c, doc.id)?, None))?;
+    let (pdf, pages) = render_pdf_and_svgs(st, job, false).await?;
+    Ok((pdf, pages, false))
+}
+
+/// An archived file of an issued document.
+fn archived(st: &AppState, id: i64, kind: &str) -> Result<Option<(FileMeta, Vec<u8>)>, AppError> {
+    let Some(meta) = st.read(|c| archive::find(c, id, kind))? else { return Ok(None) };
+    match std::fs::read(st.files_dir().join(&meta.uuid)) {
+        Ok(bytes) => Ok(Some((meta, bytes))),
+        Err(_) => Err(AppError::not_found(format!("Die archivierte Datei „{}“ fehlt im Datenordner.", meta.filename))),
+    }
+}
+
+fn archived_required(st: &AppState, id: i64, kind: &str) -> Result<(FileMeta, Vec<u8>), AppError> {
+    archived(st, id, kind)?.ok_or_else(|| AppError::not_found("Archivierte Datei nicht gefunden"))
+}
+
+/// Stores rendered files (each under one or more archive kinds). A kind archived in the meantime
+/// by another request keeps its first version; files that end up unused are removed again.
+fn archive_files(st: &AppState, id: i64, files: Vec<(Vec<&'static str>, String, &'static str, Vec<u8>)>) -> Result<(), AppError> {
+    std::fs::create_dir_all(st.files_dir()).map_err(AppError::from)?;
+    let mut metas = Vec::new();
+    for (kinds, filename, mime, bytes) in files {
+        let uuid = uuid::Uuid::new_v4().to_string();
+        std::fs::write(st.files_dir().join(&uuid), &bytes).map_err(AppError::from)?;
+        metas.push((kinds, FileMeta { id: 0, uuid, filename, mime: mime.into(), size: bytes.len() as i64, created_at: now_str() }));
+    }
+    let result = st.write(|c| {
+        let mut used = Vec::new();
+        for (kinds, meta) in metas.iter_mut() {
+            let mut any = false;
+            for kind in kinds.iter() {
+                any |= archive::insert(c, id, kind, meta)?;
+            }
+            used.push(any);
+        }
+        Ok(used)
+    });
+    let used = match &result {
+        Ok(used) => used.clone(),
+        Err(_) => vec![false; metas.len()],
+    };
+    for ((_, meta), used) in metas.iter().zip(used) {
+        if !used {
+            let _ = std::fs::remove_file(st.files_dir().join(&meta.uuid));
+        }
+    }
+    result.map(|_| ())
+}
+
+/// Makes sure PDF and preview pages of an issued document are archived (rendered on first use;
+/// documents issued before archiving existed are archived on their first download or view).
+async fn ensure_issued(st: &AppState, doc: &Document) -> Result<(), AppError> {
+    let done = st.read(|c| Ok(archive::find(c, doc.id, archive::PDF)?.is_some() && archive::find(c, doc.id, archive::PAGES)?.is_some()))?;
+    if done {
+        return Ok(());
+    }
+    let (pdf, pages, zugferd) = render_issued(st, doc).await?;
+    let pdf_kinds = if zugferd { vec![archive::PDF, archive::ZUGFERD] } else { vec![archive::PDF] };
+    let pages = serde_json::to_vec(&pages).map_err(AppError::from)?;
+    archive_files(
+        st,
+        doc.id,
+        vec![
+            (pdf_kinds, pdf_name(doc), "application/pdf", pdf),
+            (vec![archive::PAGES], pdf_name(doc).replace(".pdf", "_Vorschau.json"), "application/json", pages),
+        ],
+    )
 }
 
 pub async fn pdf(State(st): State<AppState>, Path(id): Path<i64>, Query(q): Query<PdfQ>) -> Result<Response, AppError> {
     let doc: Document = st.read(|c| db::get(c, id))?;
-    if doc.is_invoice_like() && doc.status != "draft" && doc.einvoice_format == "zugferd" {
-        if let Ok((bytes, doc)) = zugferd_bytes(&st, id).await {
-            if q.download {
-                let _ = st.write(|c| crate::services::settings::log(c, "document", id, "download", "PDF (ZUGFeRD) heruntergeladen"));
-            }
-            return Ok(file_response(bytes, "application/pdf", &pdf_name(&doc), q.download));
-        }
-    }
-    let job = st.read(|c| {
-        let lines = docs::lines_of(c, id)?;
-        data::document_job(c, &st.data_dir, &doc, &lines, None)
-    })?;
-    let bytes = render_pdf(&st, job, false).await?;
+    let (bytes, message) = if archive::is_issued(&doc) {
+        ensure_issued(&st, &doc).await?;
+        let (meta, bytes) = archived_required(&st, id, archive::PDF)?;
+        let zugferd = archived(&st, id, archive::ZUGFERD)?.is_some_and(|(z, _)| z.id == meta.id);
+        (bytes, if zugferd { "PDF (ZUGFeRD) heruntergeladen" } else { "PDF heruntergeladen" })
+    } else {
+        let job = st.read(|c| data::document_job(c, &st.data_dir, &doc, &docs::lines_of(c, id)?, None))?;
+        (render_pdf(&st, job, false).await?, "PDF heruntergeladen")
+    };
     if q.download {
-        let _ = st.write(|c| crate::services::settings::log(c, "document", id, "download", "PDF heruntergeladen"));
+        let _ = st.write(|c| crate::services::settings::log(c, "document", id, "download", message));
     }
     Ok(file_response(bytes, "application/pdf", &pdf_name(&doc), q.download))
 }
 
 pub async fn zugferd(State(st): State<AppState>, Path(id): Path<i64>) -> Result<Response, AppError> {
-    let (bytes, doc) = zugferd_bytes(&st, id).await?;
-    let _ = st.write(|c| crate::services::settings::log(c, "document", id, "einvoice", "ZUGFeRD-Rechnung erzeugt"));
-    Ok(file_response(bytes, "application/pdf", &pdf_name(&doc).replace(".pdf", "_ZUGFeRD.pdf"), true))
+    let doc: Document = st.read(|c| db::get(c, id))?;
+    let name = pdf_name(&doc).replace(".pdf", "_ZUGFeRD.pdf");
+    let bytes = if archive::is_issued(&doc) {
+        // Archives the ZUGFeRD PDF along with the main PDF when it is the document's format.
+        ensure_issued(&st, &doc).await?;
+        match archived(&st, id, archive::ZUGFERD)? {
+            Some((_, bytes)) => bytes,
+            None => {
+                let (pdf, _) = zugferd_render(&st, &doc).await?;
+                archive_files(&st, id, vec![(vec![archive::ZUGFERD], name.clone(), "application/pdf", pdf)])?;
+                archived_required(&st, id, archive::ZUGFERD)?.1
+            }
+        }
+    } else {
+        zugferd_render(&st, &doc).await?.0
+    };
+    let _ = st.write(|c| crate::services::settings::log(c, "document", id, "einvoice", "ZUGFeRD-Rechnung heruntergeladen"));
+    Ok(file_response(bytes, "application/pdf", &name, true))
 }
 
 pub async fn xrechnung(State(st): State<AppState>, Path(id): Path<i64>) -> Result<Response, AppError> {
-    let (xml, doc) = st.write(|c| {
-        let doc: Document = db::get(c, id)?;
-        let check = einvoice::check(c, &doc, true)?;
-        if !check.errors.is_empty() {
-            return Err(crate::error::UserError(format!("XRechnung nicht möglich: {}", check.errors.join(" "))).into());
-        }
-        let xml = einvoice::generate_cii(c, &doc, einvoice::GUIDELINE_XRECHNUNG)?;
-        crate::services::settings::log(c, "document", id, "einvoice", "XRechnung (CII) erzeugt")?;
-        Ok((xml, doc))
-    })?;
+    let doc: Document = st.read(|c| db::get(c, id))?;
     let name = safe_filename(&format!("XRechnung_{}.xml", doc.number));
-    Ok(file_response(xml.into_bytes(), "application/xml", &name, true))
+    let issued = archive::is_issued(&doc);
+    let existing = if issued { archived(&st, id, archive::XRECHNUNG)? } else { None };
+    let xml = match existing {
+        Some((_, bytes)) => bytes,
+        None => {
+            let xml = st.read(|c| {
+                let check = einvoice::check(c, &doc, true)?;
+                if !check.errors.is_empty() {
+                    return Err(crate::error::UserError(format!("XRechnung nicht möglich: {}", check.errors.join(" "))).into());
+                }
+                einvoice::generate_cii(c, &doc, einvoice::GUIDELINE_XRECHNUNG)
+            })?;
+            if issued {
+                archive_files(&st, id, vec![(vec![archive::XRECHNUNG], name.clone(), "application/xml", xml.into_bytes())])?;
+                archived_required(&st, id, archive::XRECHNUNG)?.1
+            } else {
+                xml.into_bytes()
+            }
+        }
+    };
+    let _ = st.write(|c| crate::services::settings::log(c, "document", id, "einvoice", "XRechnung (CII) heruntergeladen"));
+    Ok(file_response(xml, "application/xml", &name, true))
 }
 
 #[derive(Deserialize)]
@@ -266,11 +380,13 @@ pub async fn einvoice_check(State(st): State<AppState>, Path(id): Path<i64>, Que
 }
 
 pub async fn preview(State(st): State<AppState>, Path(id): Path<i64>) -> ApiResult<Pages> {
-    let job = st.read(|c| {
-        let doc: Document = db::get(c, id)?;
-        let lines = docs::lines_of(c, id)?;
-        data::document_job(c, &st.data_dir, &doc, &lines, None)
-    })?;
+    let doc: Document = st.read(|c| db::get(c, id))?;
+    if archive::is_issued(&doc) {
+        ensure_issued(&st, &doc).await?;
+        let (_, raw) = archived_required(&st, id, archive::PAGES)?;
+        return Ok(Json(Pages { pages: serde_json::from_slice(&raw).map_err(AppError::from)? }));
+    }
+    let job = st.read(|c| data::document_job(c, &st.data_dir, &doc, &docs::lines_of(c, id)?, None))?;
     Ok(Json(Pages { pages: render_svgs(&st, job).await? }))
 }
 
