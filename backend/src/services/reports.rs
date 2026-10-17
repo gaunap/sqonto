@@ -590,6 +590,7 @@ pub struct JournalRow {
 
 pub fn journal(conn: &Connection, from: NaiveDate, to: NaiveDate, account: &str, q: &str) -> Result<Vec<JournalRow>> {
     let entries = db::query::<JournalEntry>(conn, "WHERE date >= ?1 AND date <= ?2 ORDER BY date DESC, id DESC", &[v(from), v(to)])?;
+    let amounts = search_amounts(q);
     let q = q.trim().to_lowercase();
     let mut out = Vec::new();
     let mut stmt_lines: HashMap<i64, Vec<JournalLine>> = HashMap::new();
@@ -608,13 +609,31 @@ pub fn journal(conn: &Connection, from: NaiveDate, to: NaiveDate, account: &str,
         if !account.is_empty() && !lines.iter().any(|l| l.account == account) {
             continue;
         }
-        if !q.is_empty() && !format!("{} {}", e.description, e.doc_ref).to_lowercase().contains(&q) {
+        let amount: Decimal = lines.iter().map(|l| l.debit).sum();
+        if !q.is_empty()
+            && !format!("{} {}", e.description, e.doc_ref).to_lowercase().contains(&q)
+            && !lines.iter().flat_map(|l| [l.debit, l.credit]).chain([amount]).any(|a| amounts.contains(&a.abs()))
+        {
             continue;
         }
-        let amount = lines.iter().map(|l| l.debit).sum();
         out.push(JournalRow { entry: e, lines, amount });
     }
     Ok(out)
+}
+
+/// Amounts a search term may stand for. „1.450“ is read as 1,45 and, with German digit grouping, as 1.450,00.
+fn search_amounts(q: &str) -> Vec<Decimal> {
+    let mut out: Vec<Decimal> = crate::services::bankimport::parse_amount(q).map(|d| d.abs()).into_iter().collect();
+    let groups: Vec<&str> = q.trim().split('.').collect();
+    if groups.len() > 1
+        && groups.iter().all(|g| !g.is_empty() && g.chars().all(|c| c.is_ascii_digit()))
+        && groups[0].len() <= 3
+        && groups[1..].iter().all(|g| g.len() == 3)
+        && let Ok(d) = Decimal::from_str(&groups.concat())
+    {
+        out.push(d);
+    }
+    out
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -1472,6 +1491,26 @@ mod tests {
         // Dauerfristverlängerung: one month later; 10 January 2026 is a Saturday → Monday.
         assert_eq!(ustva_due(ymd(2025, 11, 30), true), ymd(2026, 1, 12));
         assert_eq!(ustva_due(ymd(2026, 9, 30), false), ymd(2026, 10, 12));
+    }
+
+    #[test]
+    fn journal_search_matches_amounts() {
+        let conn = db::open_memory();
+        cfg::ensure_seeded(&conn).unwrap();
+        for (description, amount) in [("Erlös", dec!(1450)), ("Porto", dec!(1.45))] {
+            let mut m = ManualEntry { date: ymd(2026, 2, 1), description: description.into(), debit_account: "1200".into(), credit_account: "8400".into(), amount, tax_key: "UST19".into(), ..Default::default() };
+            let id = db::insert(&conn, &mut m).unwrap();
+            crate::services::posting::rebuild(&conn, crate::services::posting::Source::Manual(id)).unwrap();
+        }
+        let hits = |q: &str| journal(&conn, ymd(2026, 1, 1), ymd(2026, 12, 31), "", q).unwrap().into_iter().map(|r| r.entry.description).collect::<Vec<_>>();
+        assert_eq!(hits("1450"), ["Erlös"]);
+        assert_eq!(hits("1.450,00 €"), ["Erlös"]);
+        assert_eq!(hits("-1450"), ["Erlös"]);
+        assert_eq!(hits("231,51"), ["Erlös"]);
+        assert_eq!(hits("1,45"), ["Porto"]);
+        assert_eq!(hits("1.450"), ["Porto", "Erlös"]);
+        assert_eq!(hits("porto"), ["Porto"]);
+        assert!(hits("999").is_empty());
     }
 
     #[test]

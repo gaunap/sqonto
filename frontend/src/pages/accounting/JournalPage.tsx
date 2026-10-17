@@ -137,7 +137,7 @@ export function JournalPage() {
         <Group>
           <DatePickerInput type="range" valueFormat="DD.MM.YYYY" value={range} onChange={(v) => setRange(v as [string | null, string | null])} leftSection={<IconCalendar size={16} />} w={250} />
           <AccountSelect allAccounts placeholder="Alle Konten" value={account} onChange={setAccount} clearable allowDeselect w={300} />
-          <TextInput placeholder="Text oder Beleg …" leftSection={<IconSearch size={16} />} value={q} onChange={(e) => setQ(e.currentTarget.value)} w={220} />
+          <TextInput placeholder="Text, Beleg oder Betrag …" leftSection={<IconSearch size={16} />} value={q} onChange={(e) => setQ(e.currentTarget.value)} w={220} />
           <Text size="sm" c="dimmed" ml="auto">
             {data?.length ?? 0} Buchungen · Buchungsvolumen {money(total)}
             {isFetching ? ' …' : ''}
