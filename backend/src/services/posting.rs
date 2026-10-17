@@ -12,6 +12,9 @@
 //! * Bilanzierung (doppelte Buchführung): invoices and receipts are booked on
 //!   their document date against Forderungen / Verbindlichkeiten (Soll-Versteuerung);
 //!   payments clear these accounts.
+//!
+//! Entries of a festgeschriebenen period are never regenerated: they keep their content and IDs
+//! even if master data (accounts, articles, asset schedules) changes later (GoBD).
 
 use std::collections::HashMap;
 
@@ -85,6 +88,7 @@ struct Ctx {
     chart: String,
     euer: bool,
     small_business: bool,
+    locked_until: Option<NaiveDate>,
     accounts: HashMap<String, Account>,
 }
 
@@ -96,8 +100,12 @@ impl Ctx {
             chart: s.tax.chart.clone(),
             euer: s.tax.bookkeeping != "bilanz",
             small_business: s.tax.small_business,
+            locked_until: s.tax.locked_until,
             accounts,
         })
+    }
+    fn is_locked(&self, date: NaiveDate) -> bool {
+        self.locked_until.is_some_and(|l| date <= l)
     }
     fn role(&self, r: &str) -> String {
         chart::role(&self.chart, r)
@@ -637,10 +645,17 @@ fn receipt_party(conn: &Connection, r: &Receipt) -> Result<String> {
     Ok(r.supplier_name.clone())
 }
 
-fn write(conn: &Connection, src: Source, drafts: Vec<EntryDraft>) -> Result<()> {
+/// Replaces the entries of a source – except those in the locked period, which stay as they are.
+fn write(conn: &Connection, ctx: &Ctx, src: Source, drafts: Vec<EntryDraft>) -> Result<()> {
     let (st, sid) = src.key();
-    conn.execute("DELETE FROM journal_entries WHERE source_type = ?1 AND source_id = ?2", rusqlite::params![st, sid])?;
-    for d in drafts {
+    match ctx.locked_until {
+        Some(l) => conn.execute(
+            "DELETE FROM journal_entries WHERE source_type = ?1 AND source_id = ?2 AND date > ?3",
+            rusqlite::params![st, sid, l.to_string()],
+        )?,
+        None => conn.execute("DELETE FROM journal_entries WHERE source_type = ?1 AND source_id = ?2", rusqlite::params![st, sid])?,
+    };
+    for d in drafts.into_iter().filter(|d| !ctx.is_locked(d.date)) {
         let lines: Vec<PL> = d.lines.into_iter().filter(|l| !l.amount.is_zero()).collect();
         if lines.is_empty() {
             continue;
@@ -679,7 +694,7 @@ fn write(conn: &Connection, src: Source, drafts: Vec<EntryDraft>) -> Result<()> 
 pub fn rebuild(conn: &Connection, src: Source) -> Result<()> {
     let ctx = Ctx::load(conn)?;
     let drafts = build(conn, &ctx, src)?;
-    write(conn, src, drafts)
+    write(conn, &ctx, src, drafts)
 }
 
 /// Rebuilds a receipt and every transaction paying it.
@@ -693,8 +708,12 @@ pub fn rebuild_receipt_with_payments(conn: &Connection, receipt_id: i64) -> Resu
     Ok(())
 }
 
+/// Regenerates the journal; entries of the locked period are kept unchanged.
 pub fn rebuild_all(conn: &Connection) -> Result<()> {
-    conn.execute("DELETE FROM journal_entries", [])?;
+    match cfg::load(conn)?.tax.locked_until {
+        Some(l) => conn.execute("DELETE FROM journal_entries WHERE date > ?1", [l.to_string()])?,
+        None => conn.execute("DELETE FROM journal_entries", [])?,
+    };
     let ids = |sql: &str| -> Result<Vec<i64>> {
         let mut stmt = conn.prepare(sql)?;
         let r = stmt.query_map([], |r| r.get(0))?.filter_map(|r| r.ok()).collect();
@@ -737,4 +756,53 @@ pub fn ensure_current_afa(conn: &Connection) -> Result<()> {
         db::meta_set(conn, "afa_year", &year)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal_macros::dec;
+
+    fn manual(conn: &Connection, date: NaiveDate, amount: Decimal) -> i64 {
+        let mut m = ManualEntry {
+            date,
+            description: format!("Test {date}"),
+            debit_account: chart::role("SKR03", "sonst_aufw"),
+            credit_account: chart::role("SKR03", "bank"),
+            amount,
+            ..Default::default()
+        };
+        let id = db::insert(conn, &mut m).unwrap();
+        rebuild(conn, Source::Manual(id)).unwrap();
+        id
+    }
+
+    /// (entry id, debit total) of the journal entry of a manual booking.
+    fn entry(conn: &Connection, id: i64) -> (i64, Decimal) {
+        let e = db::query_one::<JournalEntry>(conn, "WHERE source_type = 'manual' AND source_id = ?1", &[v(id)]).unwrap().unwrap();
+        let lines = db::query::<JournalLine>(conn, "WHERE entry_id = ?1", &[v(e.id)]).unwrap();
+        (e.id, lines.iter().map(|l| l.debit).sum())
+    }
+
+    #[test]
+    fn locked_entries_are_never_regenerated() {
+        let conn = db::open_memory();
+        cfg::ensure_seeded(&conn).unwrap();
+        let old = manual(&conn, ymd(2020, 6, 30), dec!(100));
+        let new = manual(&conn, ymd(2021, 1, 15), dec!(100));
+        let (old_entry, _) = entry(&conn, old);
+        cfg::lock_until(&conn, ymd(2020, 12, 31)).unwrap();
+        // Source data changes after the lock (e.g. directly in the database or via master data).
+        conn.execute("UPDATE manual_entries SET amount = '250'", []).unwrap();
+
+        rebuild(&conn, Source::Manual(old)).unwrap();
+        rebuild(&conn, Source::Manual(new)).unwrap();
+        assert_eq!(entry(&conn, old), (old_entry, dec!(100)), "locked entry unchanged, same id");
+        assert_eq!(entry(&conn, new).1, dec!(250), "unlocked entry follows the source");
+
+        rebuild_all(&conn).unwrap();
+        assert_eq!(entry(&conn, old), (old_entry, dec!(100)));
+        assert_eq!(entry(&conn, new).1, dec!(250));
+        assert_eq!(db::scalar_i64(&conn, "SELECT COUNT(*) FROM journal_entries", &[]).unwrap(), 2, "no duplicates");
+    }
 }

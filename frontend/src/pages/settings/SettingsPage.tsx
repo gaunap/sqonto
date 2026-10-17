@@ -325,7 +325,7 @@ function TaxTab({ s, patch }: { s: Settings; patch: Patch }) {
           Buchungen neu erzeugen
         </Text>
         <Text size="sm" c="dimmed" mb="sm">
-          Erzeugt das Buchungsjournal aus allen Rechnungen, Belegen, Zahlungen und Anlagen neu. Normalerweise nicht nötig.
+          Erzeugt das Buchungsjournal aus allen Rechnungen, Belegen, Zahlungen und Anlagen neu. Buchungen festgeschriebener Zeiträume bleiben unverändert. Normalerweise nicht nötig.
         </Text>
         <Button variant="light" leftSection={<IconRefresh size={16} />} onClick={() => rebuild.mutate()} loading={rebuild.isPending}>
           Journal neu erzeugen
