@@ -1311,7 +1311,7 @@ pub fn dashboard(conn: &Connection) -> Result<Dashboard> {
     let prev_docs = db::query::<Document>(
         conn,
         "WHERE doc_type IN ('invoice','credit_note') AND status != 'draft' AND date >= ?1 AND date <= ?2",
-        &[v(ymd(year - 1, 1, 1)), v(ymd(year - 1, t.month(), t.day().min(28)))],
+        &[v(ymd(year - 1, 1, 1)), v(same_day_last_year(t))],
     )?;
     let invoiced_prev_year_to_date = prev_docs.iter().map(|d| d.net_total * d.sign()).sum();
     let oi = open_items(conn)?;
@@ -1396,6 +1396,12 @@ pub fn dashboard(conn: &Connection) -> Result<Dashboard> {
     })
 }
 
+/// The same calendar day one year earlier (29 February becomes 28 February).
+fn same_day_last_year(t: NaiveDate) -> NaiveDate {
+    let y = t.year() - 1;
+    ymd(y, t.month(), t.day().min(last_day_of_month(y, t.month()).day()))
+}
+
 /// Ended Voranmeldungszeiträume of this and the previous year that are not marked as submitted –
 /// the previous year matters in January / February, when its last return is due. Only periods
 /// with actual bookings count (no nagging for months before the company used the software).
@@ -1433,6 +1439,13 @@ mod tests {
         let mut m = ManualEntry { date, description: "Miete".into(), debit_account: "4210".into(), credit_account: "1200".into(), amount: dec!(500), ..Default::default() };
         let id = db::insert(conn, &mut m).unwrap();
         crate::services::posting::rebuild(conn, crate::services::posting::Source::Manual(id)).unwrap();
+    }
+
+    #[test]
+    fn previous_year_comparison_day() {
+        assert_eq!(same_day_last_year(ymd(2026, 3, 31)), ymd(2025, 3, 31));
+        assert_eq!(same_day_last_year(ymd(2026, 10, 17)), ymd(2025, 10, 17));
+        assert_eq!(same_day_last_year(ymd(2028, 2, 29)), ymd(2027, 2, 28));
     }
 
     #[test]
