@@ -14,6 +14,7 @@ mod api;
 mod chart;
 mod db;
 mod error;
+mod guard;
 mod models;
 mod pdf;
 mod services;
@@ -28,7 +29,6 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 use tower_http::compression::CompressionLayer;
-use tower_http::cors::CorsLayer;
 
 use crate::state::{AppState, Inner};
 
@@ -106,7 +106,7 @@ pub async fn launch(port: u16, dir: &Path) -> anyhow::Result<Launch> {
     let pdf = pdf::PdfEngine::new();
     tracing::info!("{} Schriftfamilien verfügbar", pdf.families().len());
     let state = AppState(Arc::new(Inner { db: Mutex::new(conn), data_dir: dir.to_path_buf(), pdf }));
-    let app = api::router(state).layer(CompressionLayer::new()).layer(CorsLayer::permissive());
+    let app = api::router(state).layer(CompressionLayer::new()).layer(axum::middleware::from_fn(guard::local_only));
     Ok(Launch::Started(Server { listener, app, port, url: format!("http://localhost:{port}"), data_dir: dir.to_path_buf() }))
 }
 
