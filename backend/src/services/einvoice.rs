@@ -755,11 +755,24 @@ pub fn parse_xml(xml: &str) -> Result<ParsedInvoice> {
     let xml = xml.trim_start_matches('\u{feff}');
     let doc = roxmltree::Document::parse(xml).context("Die Datei ist kein gültiges XML")?;
     let root = doc.root_element();
-    match root.tag_name().name() {
-        "CrossIndustryInvoice" => Ok(parse_cii(root)),
-        "Invoice" | "CreditNote" => Ok(parse_ubl(root)),
-        other => Err(crate::error::UserError(format!("Unbekanntes E-Rechnungsformat ({other}). Unterstützt werden XRechnung/ZUGFeRD (CII) und UBL.")).into()),
+    let inv = match root.tag_name().name() {
+        "CrossIndustryInvoice" => parse_cii(root),
+        "Invoice" | "CreditNote" => parse_ubl(root),
+        other => return Err(crate::error::UserError(format!("Unbekanntes E-Rechnungsformat ({other}). Unterstützt werden XRechnung/ZUGFeRD (CII) und UBL.")).into()),
+    };
+    // Mandatory in every EN 16931 invoice; without them the file is no usable e-invoice.
+    let missing: Vec<&str> = [
+        (inv.number.is_empty(), "Rechnungsnummer"),
+        (inv.issue_date.is_none(), "Rechnungsdatum"),
+        (inv.seller.name.is_empty(), "Verkäufer"),
+    ]
+    .into_iter()
+    .filter_map(|(missing, label)| missing.then_some(label))
+    .collect();
+    if !missing.is_empty() {
+        return Err(crate::error::UserError(format!("Die E-Rechnung ist unvollständig (es fehlt: {}).", missing.join(", "))).into());
     }
+    Ok(inv)
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -861,4 +874,30 @@ pub fn to_receipt(conn: &Connection, inv: &ParsedInvoice, source: &str) -> Resul
         warnings.push(format!("Rechnungswährung {} – Beträge bitte in EUR umrechnen.", inv.currency));
     }
     Ok((ReceiptInput { receipt, lines, payment: None }, matched, warnings))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ubl(body: &str) -> String {
+        format!(r#"<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2" xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2" xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2">{body}</Invoice>"#)
+    }
+
+    #[test]
+    fn incomplete_invoices_are_rejected() {
+        let err = parse_xml(&ubl("")).unwrap_err().to_string();
+        assert!(err.contains("Rechnungsnummer, Rechnungsdatum, Verkäufer"), "{err}");
+        let err = parse_xml(&ubl("<cbc:ID>R-1</cbc:ID><cbc:IssueDate>2026-03-01</cbc:IssueDate>")).unwrap_err().to_string();
+        assert!(err.ends_with("(es fehlt: Verkäufer)."), "{err}");
+    }
+
+    #[test]
+    fn minimal_invoice_is_accepted() {
+        let inv = parse_xml(&ubl(
+            "<cbc:ID>R-1</cbc:ID><cbc:IssueDate>2026-03-01</cbc:IssueDate>             <cac:AccountingSupplierParty><cac:Party><cac:PartyName><cbc:Name>Lieferant GmbH</cbc:Name></cac:PartyName></cac:Party></cac:AccountingSupplierParty>",
+        ))
+        .unwrap();
+        assert_eq!((inv.number.as_str(), inv.issue_date, inv.seller.name.as_str()), ("R-1", Some(crate::util::ymd(2026, 3, 1)), "Lieferant GmbH"));
+    }
 }
