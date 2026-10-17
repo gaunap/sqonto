@@ -859,16 +859,27 @@ pub fn create_cash_entry(conn: &Connection, input: CashEntryInput) -> Result<i64
     let sign = if input.direction == "in" { Decimal::ONE } else { Decimal::NEGATIVE_ONE };
     let amount = sign * r2(input.amount);
     let date = input.date.unwrap_or_else(today);
+    // The money must flow in the direction that settles the invoice or receipt and not exceed
+    // what is open (credit notes and supplier credit notes are refunds).
+    let check_open = |money_sign: Decimal, remaining: Decimal, what: &str| -> Result<()> {
+        if remaining <= Decimal::ZERO {
+            bail_user!("{what} ist bereits vollständig beglichen.");
+        }
+        if money_sign != sign {
+            bail_user!("{what} wird als {} gebucht.", if money_sign > Decimal::ZERO { "Einnahme" } else { "Ausgabe" });
+        }
+        if amount.abs() > remaining + Decimal::new(1, 2) {
+            bail_user!("Der Betrag übersteigt den offenen Betrag von {}.", fmt_money(remaining));
+        }
+        Ok(())
+    };
     let alloc = if let Some(did) = input.document_id {
         let d: Document = db::get(conn, did)?;
-        if d.sign() != sign {
-            bail_user!("Rechnungen werden als Einnahme, Gutschriften als Ausgabe gebucht.");
-        }
-        if amount.abs() > d.open_amount() + Decimal::new(1, 2) {
-            bail_user!("Der Betrag übersteigt den offenen Betrag von {}.", fmt_money(d.open_amount()));
-        }
+        check_open(d.money_sign(), d.remaining(), &format!("{} {}", documents::type_label(&d.doc_type, &d.kind), d.number))?;
         Allocation { kind: "document".into(), document_id: Some(did), amount, ..Default::default() }
     } else if let Some(rid) = input.receipt_id {
+        let r: Receipt = db::get(conn, rid)?;
+        check_open(r.money_sign(), r.remaining(), &format!("Beleg {}", r.number))?;
         Allocation { kind: "receipt".into(), receipt_id: Some(rid), amount, ..Default::default() }
     } else {
         if input.counter_account.is_empty() {
@@ -944,6 +955,24 @@ mod tests {
         assert!(save_account(&conn, PaymentAccount { opening_balance: dec!(2000), ..acc.clone() }).is_err(), "opening balance in locked period");
         assert!(save_account(&conn, PaymentAccount { opening_date: ymd(2021, 1, 1), ..acc.clone() }).is_err(), "moving the opening out of the locked period");
         assert!(save_account(&conn, PaymentAccount { iban: "DE02120300000000202051".into(), archived: true, ..acc }).is_ok(), "master data stays editable");
+    }
+
+    #[test]
+    fn cash_payment_of_a_receipt_is_checked() {
+        let conn = db::open_memory();
+        cfg::ensure_seeded(&conn).unwrap();
+        let cash = save_account(&conn, PaymentAccount { name: "Kasse".into(), kind: "cash".into(), opening_balance: dec!(500), opening_date: ymd(2026, 1, 1), ..Default::default() }).unwrap();
+        let receipt = Receipt { supplier_name: "Bürobedarf".into(), receipt_type: "expense".into(), date: ymd(2026, 2, 1), prices_gross: true, ..Default::default() };
+        let lines = vec![ReceiptLine { account: "4930".into(), gross: dec!(119), tax_rate: dec!(19), ..Default::default() }];
+        let rid = receipts::create(&conn, receipts::ReceiptInput { receipt, lines, payment: None }).unwrap();
+        let pay = |direction: &str, amount: Decimal| {
+            create_cash_entry(&conn, CashEntryInput { account_id: cash, date: Some(ymd(2026, 2, 2)), direction: direction.into(), amount, description: "Bürobedarf".into(), receipt_id: Some(rid), ..Default::default() })
+        };
+        assert!(pay("in", dec!(119)).is_err(), "an expense is paid out");
+        assert!(pay("out", dec!(200)).is_err(), "more than open");
+        pay("out", dec!(119)).unwrap();
+        assert_eq!(db::get::<Receipt>(&conn, rid).unwrap().status, "paid");
+        assert!(pay("out", dec!(1)).is_err(), "already paid");
     }
 
     #[test]
