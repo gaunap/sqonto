@@ -1337,18 +1337,7 @@ pub fn dashboard(conn: &Connection) -> Result<Dashboard> {
     if drafts > 0 {
         todos.push(Todo { kind: "drafts".into(), label: plural(drafts, "Rechnungsentwurf", "Rechnungsentwürfe"), count: drafts, link: "/rechnungen?status=draft".into(), severity: "gray".into() });
     }
-    // Only periods with actual bookings count as outstanding returns (no nagging for
-    // months before the company started using the software).
-    let mut unfiled = 0i64;
-    for p in ustva_periods(conn, year)? {
-        if p.filing.is_some() || p.to >= t || s.tax.small_business || s.tax.ustva_period == "yearly" {
-            continue;
-        }
-        let entries = db::scalar_i64(conn, "SELECT COUNT(*) FROM journal_entries WHERE date >= ?1 AND date <= ?2", &[v(p.from), v(p.to)])?;
-        if entries > 0 || !p.zahllast.is_zero() {
-            unfiled += 1;
-        }
-    }
+    let unfiled = unfiled_ustva(conn, t)?;
     if unfiled > 0 {
         todos.push(Todo { kind: "ustva".into(), label: plural(unfiled, "offene Umsatzsteuer-Voranmeldung", "offene Umsatzsteuer-Voranmeldungen"), count: unfiled, link: "/steuern/ustva".into(), severity: "violet".into() });
     }
@@ -1407,7 +1396,56 @@ pub fn dashboard(conn: &Connection) -> Result<Dashboard> {
     })
 }
 
+/// Ended Voranmeldungszeiträume of this and the previous year that are not marked as submitted –
+/// the previous year matters in January / February, when its last return is due. Only periods
+/// with actual bookings count (no nagging for months before the company used the software).
+fn unfiled_ustva(conn: &Connection, t: NaiveDate) -> Result<i64> {
+    let s = cfg::load(conn)?;
+    if s.tax.small_business || s.tax.ustva_period == "yearly" {
+        return Ok(0);
+    }
+    let mut unfiled = 0i64;
+    for year in [t.year() - 1, t.year()] {
+        for p in ustva_periods(conn, year)? {
+            if p.filing.is_some() || p.to >= t {
+                continue;
+            }
+            let entries = db::scalar_i64(conn, "SELECT COUNT(*) FROM journal_entries WHERE date >= ?1 AND date <= ?2", &[v(p.from), v(p.to)])?;
+            if entries > 0 || !p.zahllast.is_zero() {
+                unfiled += 1;
+            }
+        }
+    }
+    Ok(unfiled)
+}
+
 fn plural(n: i64, one: &str, many: &str) -> String {
     if n == 1 { one.into() } else { many.into() }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal_macros::dec;
+
+    fn booking(conn: &Connection, date: NaiveDate) {
+        let mut m = ManualEntry { date, description: "Miete".into(), debit_account: "4210".into(), credit_account: "1200".into(), amount: dec!(500), ..Default::default() };
+        let id = db::insert(conn, &mut m).unwrap();
+        crate::services::posting::rebuild(conn, crate::services::posting::Source::Manual(id)).unwrap();
+    }
+
+    #[test]
+    fn last_years_final_return_is_outstanding_in_january() {
+        let conn = db::open_memory();
+        cfg::ensure_seeded(&conn).unwrap();
+        booking(&conn, ymd(2025, 11, 15));
+        booking(&conn, ymd(2026, 1, 5));
+        // Q4/2025 ended and was not submitted; Q1/2026 is still running.
+        assert_eq!(unfiled_ustva(&conn, ymd(2026, 1, 20)).unwrap(), 1);
+        let mut f = UstvaFiling { year: 2025, period: "Q4".into(), submitted_at: "2026-01-09".into(), ..Default::default() };
+        db::insert(&conn, &mut f).unwrap();
+        assert_eq!(unfiled_ustva(&conn, ymd(2026, 1, 20)).unwrap(), 0);
+        assert_eq!(unfiled_ustva(&conn, ymd(2026, 4, 2)).unwrap(), 1, "Q1/2026 after its end");
+    }
+}
