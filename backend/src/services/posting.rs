@@ -474,10 +474,17 @@ fn build(conn: &Connection, ctx: &Ctx, src: Source) -> Result<Vec<EntryDraft>> {
                         if rate > Decimal::ZERO && !ctx.small_business {
                             let net = r2(a.amount / (Decimal::ONE + rate / HUNDRED));
                             let tax = a.amount - net;
-                            if a.amount > Decimal::ZERO {
+                            // Revenue accounts carry output tax and expense accounts input tax – a
+                            // refund corrects the same tax. Other accounts (e.g. selling or buying an
+                            // asset) follow the direction of the money.
+                            let output_tax = match ctx.accounts.get(&target).map(|x| x.kind.as_str()) {
+                                Some("revenue") => true,
+                                Some("expense") => false,
+                                _ => a.amount > Decimal::ZERO,
+                            };
+                            if output_tax {
                                 let (tacc, tcode) = ctx.ust_account(rate);
-                                let code = if ctx.is_revenue(&target) { base_code_for_rate(rate) } else { "" };
-                                lines.push(plc(target, -net, code));
+                                lines.push(plc(target, -net, base_code_for_rate(rate)));
                                 lines.push(plt(tacc, -tax, tcode, -net));
                             } else {
                                 lines.push(pl(target, -net));
@@ -782,6 +789,55 @@ mod tests {
         let e = db::query_one::<JournalEntry>(conn, "WHERE source_type = 'manual' AND source_id = ?1", &[v(id)]).unwrap().unwrap();
         let lines = db::query::<JournalLine>(conn, "WHERE entry_id = ?1", &[v(e.id)]).unwrap();
         (e.id, lines.iter().map(|l| l.debit).sum())
+    }
+
+    /// Books `amount` on a bank account directly against `account` with the given VAT rate.
+    fn direct(conn: &Connection, account: &str, amount: Decimal, rate: Decimal) {
+        use crate::services::finance::{self, TransactionInput};
+        let bank = match db::query_one::<PaymentAccount>(conn, "", &[]).unwrap() {
+            Some(a) => a.id,
+            None => finance::save_account(conn, PaymentAccount { name: "Bank".into(), opening_date: ymd(2026, 1, 1), ..Default::default() }).unwrap(),
+        };
+        let date = ymd(2026, 2, 10);
+        let alloc = Allocation { kind: "account".into(), account: account.into(), tax_rate: rate, amount, date, ..Default::default() };
+        let tx = Transaction { account_id: bank, date, amount, purpose: format!("{account} {amount}"), ..Default::default() };
+        finance::create(conn, TransactionInput { tx, allocations: vec![alloc] }).unwrap();
+    }
+
+    /// (Kz 81 base, output tax, input tax) of Q1 2026.
+    fn ustva_q1(conn: &Connection) -> (Decimal, Decimal, Decimal) {
+        let r = crate::services::reports::ustva(conn, 2026, "Q1").unwrap();
+        let kz81 = r.sections.iter().flat_map(|s| &s.fields).find(|f| f.kz == "81").and_then(|f| f.base).unwrap_or_default();
+        (kz81, r.output_tax, r.input_tax)
+    }
+
+    #[test]
+    fn direct_bookings_choose_tax_by_account() {
+        let setup = || {
+            let conn = db::open_memory();
+            cfg::ensure_seeded(&conn).unwrap();
+            conn
+        };
+        // Expense paid: Vorsteuer.
+        let conn = setup();
+        direct(&conn, "4930", dec!(-119), dec!(19));
+        assert_eq!(ustva_q1(&conn), (dec!(0), dec!(0), dec!(19)));
+        // Refund from a supplier on the expense account: reduces the Vorsteuer, no output tax.
+        direct(&conn, "4930", dec!(119), dec!(19));
+        assert_eq!(ustva_q1(&conn), (dec!(0), dec!(0), dec!(0)));
+
+        // Revenue received: USt with base in Kz 81.
+        let conn = setup();
+        direct(&conn, "8400", dec!(238), dec!(19));
+        assert_eq!(ustva_q1(&conn), (dec!(200), dec!(38), dec!(0)));
+        // Refund to a customer on the revenue account: reduces USt and base, no Vorsteuer.
+        direct(&conn, "8400", dec!(-119), dec!(19));
+        assert_eq!(ustva_q1(&conn), (dec!(100), dec!(19), dec!(0)));
+
+        // Sale of an asset (incoming money on an asset account): taxable turnover with base.
+        let conn = setup();
+        direct(&conn, "0420", dec!(1190), dec!(19));
+        assert_eq!(ustva_q1(&conn), (dec!(1000), dec!(190), dec!(0)));
     }
 
     #[test]
