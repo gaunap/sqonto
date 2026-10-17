@@ -51,6 +51,7 @@ export type * from './EinvoiceCheck';
 export type * from './FileMeta';
 export type * from './FilingRequest';
 export type * from './FontList';
+export type * from './GettingStartedInput';
 export type * from './IdResponse';
 export type * from './ImportPreview';
 export type * from './ImportRequest';

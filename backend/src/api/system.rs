@@ -110,6 +110,23 @@ pub async fn put_settings(State(st): State<AppState>, Json(mut new): Json<Settin
 
 #[derive(Deserialize, TS)]
 #[ts(export)]
+pub struct GettingStartedInput {
+    pub hidden: bool,
+}
+
+/// Shows or hides the "Erste Schritte" checklist on the dashboard without touching other settings.
+pub async fn put_getting_started(State(st): State<AppState>, Json(input): Json<GettingStartedInput>) -> ApiResult<Settings> {
+    st.write(|c| {
+        let mut s = cfg::load(c)?;
+        s.hide_getting_started = input.hidden;
+        cfg::save(c, &s)?;
+        Ok(s)
+    })
+    .map(Json)
+}
+
+#[derive(Deserialize, TS)]
+#[ts(export)]
 pub struct OnboardingInput {
     pub settings: Settings,
     pub bank_name: String,

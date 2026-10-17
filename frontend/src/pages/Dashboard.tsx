@@ -4,6 +4,7 @@
 
 import { Link, useNavigate } from 'react-router';
 import {
+  ActionIcon,
   Anchor,
   Badge,
   Box,
@@ -21,8 +22,10 @@ import {
   Text,
   ThemeIcon,
   Title,
+  Tooltip,
   UnstyledButton,
 } from '@mantine/core';
+import { notifications } from '@mantine/notifications';
 import { AreaChart, CompositeChart, DonutChart } from '@mantine/charts';
 import {
   IconAlertTriangle,
@@ -40,10 +43,12 @@ import {
   IconWallet,
   IconCoins,
   IconTrendingUp,
+  IconX,
 } from '@tabler/icons-react';
 import dayjs from 'dayjs';
-import { useApi } from '@/api/hooks';
-import type { Dashboard, Todo } from '@/api/types';
+import { api } from '@/api/client';
+import { useAction, useApi } from '@/api/hooks';
+import type { Dashboard, GettingStartedInput, Settings, Todo } from '@/api/types';
 import { KpiCard, Page, SectionCard } from '@/components/ui';
 import { date, dateTime, money, moneyCompact, moneyShort, num, relativeDays } from '@/lib/format';
 
@@ -94,8 +99,17 @@ function GettingStarted({ setup }: { setup: Dashboard['setup'] }) {
     { done: setup.has_receipts, label: 'Ersten Beleg erfassen', hint: 'PDF, Foto oder E-Rechnung hochladen', to: '/belege/neu' },
     { done: setup.has_bank_data, label: 'Kontoauszug importieren', hint: 'Zahlungen automatisch zuordnen', to: '/bank' },
   ];
+  const hide = useAction(() => api.put<Settings>('/settings/getting-started', { hidden: true } satisfies GettingStartedInput), {
+    onSuccess: () =>
+      notifications.show({
+        color: 'teal',
+        title: '„Erste Schritte“ ausgeblendet',
+        message: 'Unter Einstellungen → Übersicht können Sie die Checkliste jederzeit wieder einblenden.',
+        autoClose: 6000,
+      }),
+  });
   const doneCount = steps.filter((s) => s.done).length;
-  if (doneCount >= 5 && setup.has_invoices) return null;
+  if (setup.hidden || (doneCount >= 5 && setup.has_invoices)) return null;
   return (
     <Card mb="lg" padding="lg">
       <Group justify="space-between" mb="md">
@@ -105,7 +119,14 @@ function GettingStarted({ setup }: { setup: Dashboard['setup'] }) {
             {doneCount} von {steps.length} erledigt – in wenigen Minuten startklar
           </Text>
         </div>
-        <RingProgress size={56} thickness={6} roundCaps sections={[{ value: (doneCount / steps.length) * 100, color: 'brand' }]} label={<Text ta="center" size="xs" fw={700}>{Math.round((doneCount / steps.length) * 100)}%</Text>} />
+        <Group gap="xs" wrap="nowrap" align="flex-start">
+          <RingProgress size={56} thickness={6} roundCaps sections={[{ value: (doneCount / steps.length) * 100, color: 'brand' }]} label={<Text ta="center" size="xs" fw={700}>{Math.round((doneCount / steps.length) * 100)}%</Text>} />
+          <Tooltip label="Erste Schritte ausblenden" withArrow>
+            <ActionIcon variant="subtle" color="gray" aria-label="Erste Schritte ausblenden" onClick={() => hide.mutate()} loading={hide.isPending}>
+              <IconX size={16} />
+            </ActionIcon>
+          </Tooltip>
+        </Group>
       </Group>
       <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="sm">
         {steps.map((s) => (

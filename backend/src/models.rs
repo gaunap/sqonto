@@ -855,4 +855,6 @@ pub struct Settings {
     pub tax: TaxSettings,
     pub docs: DocSettings,
     pub dunning: DunningSettings,
+    /// Hides the "Erste Schritte" checklist on the dashboard.
+    pub hide_getting_started: bool,
 }

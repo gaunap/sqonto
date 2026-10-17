@@ -46,6 +46,7 @@ import {
   IconEdit,
   IconFileText,
   IconHash,
+  IconHome2,
   IconLayout,
   IconLock,
   IconPlus,
@@ -665,6 +666,30 @@ function DataTab() {
   );
 }
 
+function OverviewTab({ s, patch }: { s: Settings; patch: Patch }) {
+  return (
+    <Stack gap="lg" maw={760}>
+      <Card>
+        <Text fw={650} mb={4}>
+          Startseite
+        </Text>
+        <Text size="sm" c="dimmed" mb="md">
+          Legt fest, welche Bereiche auf der Übersicht angezeigt werden.
+        </Text>
+        <Switch
+          label="„Erste Schritte“ anzeigen"
+          description="Checkliste zur Einrichtung (Firmendaten, Logo, erster Kunde, erste Rechnung …). Sie verschwindet automatisch, sobald die wichtigsten Schritte erledigt sind."
+          checked={!s.hide_getting_started}
+          onChange={(e) => {
+            const show = e.currentTarget.checked;
+            patch((x) => ({ ...x, hide_getting_started: !show }));
+          }}
+        />
+      </Card>
+    </Stack>
+  );
+}
+
 /** Public repository; shown as source code link in "Über Sqonto" once set. */
 const SOURCE_URL = '';
 
@@ -728,6 +753,7 @@ const TABS = [
   { value: 'nummern', label: 'Nummernkreise', icon: IconHash, saves: false },
   { value: 'mahnwesen', label: 'Mahnwesen', icon: IconBell, saves: true },
   { value: 'konten', label: 'Zahlungskonten', icon: IconBuildingBank, saves: false },
+  { value: 'uebersicht', label: 'Übersicht', icon: IconHome2, saves: true },
   { value: 'daten', label: 'Daten & Sicherung', icon: IconDatabase, saves: false },
   { value: 'info', label: 'Über Sqonto', icon: IconInfoCircle, saves: false },
 ];
@@ -783,6 +809,7 @@ export function SettingsPage() {
           {current.value === 'nummern' && <NumbersTab />}
           {current.value === 'mahnwesen' && <DunningTab s={s} patch={patch} />}
           {current.value === 'konten' && <AccountsTab />}
+          {current.value === 'uebersicht' && <OverviewTab s={s} patch={patch} />}
           {current.value === 'daten' && <DataTab />}
           {current.value === 'info' && <AboutTab />}
         </>

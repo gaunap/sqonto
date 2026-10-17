@@ -35,6 +35,7 @@ pub fn router(state: AppState) -> Router {
         .route("/system/restore", post(system::restore))
         .route("/system/reset", post(system::reset))
         .route("/settings", get(system::get_settings).put(system::put_settings))
+        .route("/settings/getting-started", put(system::put_getting_started))
         .route("/fonts", get(system::fonts))
         .route("/search", get(system::search))
         .route("/activities", get(system::activities))

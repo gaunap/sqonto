@@ -1236,6 +1236,8 @@ pub struct SetupProgress {
     pub has_invoices: bool,
     pub has_receipts: bool,
     pub has_bank_data: bool,
+    /// Checklist was hidden by the user (Einstellungen → Übersicht).
+    pub hidden: bool,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -1368,6 +1370,7 @@ pub fn dashboard(conn: &Connection) -> Result<Dashboard> {
         has_invoices: count("SELECT COUNT(*) FROM documents WHERE doc_type = 'invoice'") > 0,
         has_receipts: count("SELECT COUNT(*) FROM receipts") > 0,
         has_bank_data: count("SELECT COUNT(*) FROM transactions") > 0,
+        hidden: s.hide_getting_started,
     };
     Ok(Dashboard {
         setup,
