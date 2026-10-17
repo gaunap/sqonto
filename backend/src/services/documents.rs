@@ -533,6 +533,15 @@ pub fn delete(conn: &Connection, id: i64) -> Result<()> {
 }
 
 pub fn finalize(conn: &Connection, id: i64) -> Result<Document> {
+    issue(conn, id, true)
+}
+
+/// Demo documents are issued even while the company profile is still incomplete.
+pub(crate) fn finalize_demo(conn: &Connection, id: i64) -> Result<Document> {
+    issue(conn, id, false)
+}
+
+fn issue(conn: &Connection, id: i64, check_invoice_data: bool) -> Result<Document> {
     let s = cfg::load(conn)?;
     let mut doc: Document = db::get(conn, id)?;
     if doc.status != "draft" {
@@ -559,7 +568,7 @@ pub fn finalize(conn: &Connection, id: i64) -> Result<Document> {
     }
     let t = calc::calculate(&doc, &mut lines);
     calc::apply_totals(&mut doc, &t);
-    if doc.is_invoice_like() {
+    if doc.is_invoice_like() && check_invoice_data {
         let missing = missing_invoice_data(conn, &s, &doc, &lines)?;
         if !missing.is_empty() {
             bail_user!("Für eine ordnungsgemäße Rechnung (§ 14 UStG) fehlt: {}.", missing.join("; "));
@@ -821,7 +830,8 @@ pub fn cancel(conn: &Connection, id: i64) -> Result<i64> {
     let vars = [("Bezugsnummer", src.number.clone()), ("Bezugsdatum", fmt_date(src.date))];
     d.intro_text = util::fill_placeholders(&d.intro_text, &vars);
     let new_id = create(conn, DocumentInput { doc: d, lines: clone_lines(&lines, true, false) })?;
-    let storno = finalize(conn, new_id)?;
+    // The cancellation mirrors an issued invoice; it must stay possible even if that one was incomplete.
+    let storno = issue(conn, new_id, false)?;
     let mut st = storno.clone();
     st.status = "cancelled".into();
     db::update(conn, &st)?;

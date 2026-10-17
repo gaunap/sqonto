@@ -207,7 +207,7 @@ pub fn load(conn: &Connection) -> Result<()> {
         input.lines = lines;
         let id = documents::create(conn, input)?;
         if finalize {
-            documents::finalize(conn, id)?;
+            documents::finalize_demo(conn, id)?;
         }
         db::get(conn, id)
     };
@@ -279,7 +279,7 @@ pub fn load(conn: &Connection) -> Result<()> {
         full.doc.due_date = Some(full.doc.date + Duration::days(full.doc.payment_terms_days.unwrap_or(14)));
         full.doc.reference = inv.number.clone();
         documents::update(conn, cn_id, DocumentInput { doc: full.doc, lines: full.lines })?;
-        documents::finalize(conn, cn_id)?;
+        documents::finalize_demo(conn, cn_id)?;
     }
     // Overdue invoices for dunning
     for (ci, m_back, art) in [(0usize, 2i64, 2usize), (8, 1, 0)] {
@@ -304,7 +304,7 @@ pub fn load(conn: &Connection) -> Result<()> {
     let mut order = documents::get_full(conn, order_id)?;
     order.doc.date = project_start + Duration::days(5);
     documents::update(conn, order_id, DocumentInput { doc: order.doc, lines: order.lines })?;
-    let order = documents::finalize(conn, order_id)?;
+    let order = documents::finalize_demo(conn, order_id)?;
     let mut partial_dates = vec![project_start + Duration::days(10), project_start + Duration::days(60)];
     partial_dates.retain(|d| *d <= today());
     for (i, pd) in partial_dates.iter().enumerate() {
@@ -314,7 +314,7 @@ pub fn load(conn: &Connection) -> Result<()> {
         p.doc.due_date = Some(*pd + Duration::days(14));
         p.doc.service_date = Some(*pd);
         documents::update(conn, pid, DocumentInput { doc: p.doc, lines: p.lines })?;
-        let p = documents::finalize(conn, pid)?;
+        let p = documents::finalize_demo(conn, pid)?;
         pay(conn, &p, *pd + Duration::days(9), None)?;
     }
     if project_start + Duration::days(120) <= today() {
@@ -325,12 +325,12 @@ pub fn load(conn: &Connection) -> Result<()> {
         f.doc.due_date = Some(fd + Duration::days(14));
         f.doc.service_date = Some(fd);
         documents::update(conn, fid, DocumentInput { doc: f.doc, lines: f.lines })?;
-        documents::finalize(conn, fid)?;
+        documents::finalize_demo(conn, fid)?;
     }
     // Order confirmation + delivery note
     let ab = make_doc(conn, "order", &customers[9], today() - Duration::days(6), vec![line_from(&articles[8], dec!(2)), line_from(&articles[9], dec!(5))], true)?;
     let ls_id = documents::convert(conn, ab.id, "delivery")?;
-    documents::finalize(conn, ls_id)?;
+    documents::finalize_demo(conn, ls_id)?;
 
     // ---------------------------------------------------------------- Belege
     let rl = |account: String, desc: &str, gross: Decimal, rate: i64| ReceiptLine {
@@ -541,4 +541,21 @@ fn renumber_chronologically(conn: &Connection) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loads_with_incomplete_company() {
+        let conn = db::open_memory();
+        cfg::ensure_seeded(&conn).unwrap();
+        let mut s = cfg::load(&conn).unwrap();
+        s.company.name = "Nur ein Name".into();
+        cfg::save(&conn, &s).unwrap();
+        finance::save_account(&conn, PaymentAccount { name: "Bank".into(), kind: "bank".into(), ..Default::default() }).unwrap();
+        load(&conn).unwrap();
+        assert!(db::scalar_i64(&conn, "SELECT COUNT(*) FROM documents WHERE status != 'draft'", &[]).unwrap() > 0);
+    }
 }
