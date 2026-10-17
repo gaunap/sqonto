@@ -38,9 +38,9 @@ import type { ContactDefaults, Document, DocumentFull, DocumentInput, PreviewRes
 import { ContactSelect, DateField } from '@/components/inputs';
 import { emptyLine, LinesEditor, newKey, type EditorLine } from '@/components/LinesEditor';
 import { PagesPreview, TotalsBox } from '@/components/DocumentParts';
-import { Page, PageHeader, StatusBadge, confirmAction } from '@/components/ui';
+import { Page, PageHeader, StatusBadge } from '@/components/ui';
 import { calculate } from '@/lib/calc';
-import { money } from '@/lib/format';
+import { date as fmtDate, money, today } from '@/lib/format';
 import { useLeaveWarning } from '@/lib/desktop';
 import { DOC_TYPES, EINVOICE_FORMATS, TAX_MODES, docLabel, type DocType } from '@/lib/labels';
 
@@ -152,10 +152,13 @@ export function DocumentEditorPage() {
     staleTime: 60_000,
   });
 
+  const [finalizeOpen, setFinalizeOpen] = useState(false);
   const save = useAction(
-    async (opts: { finalize?: boolean }) => {
+    async (opts: { finalize?: boolean; redate?: string }) => {
       if (!payload) throw new Error('Kein Dokument');
-      const saved = isNew || !doc?.id ? await api.post<DocumentFull>('/documents', payload) : await api.put<DocumentFull>(`/documents/${doc.id}`, payload);
+      // "Auf heute setzen": the new date goes along with the save before finalizing.
+      const body = opts.redate ? { ...payload, doc: { ...payload.doc, ...redated(payload.doc, opts.redate) } } : payload;
+      const saved = isNew || !doc?.id ? await api.post<DocumentFull>('/documents', body) : await api.put<DocumentFull>(`/documents/${doc.id}`, body);
       if (opts.finalize) {
         return api.post<DocumentFull>(`/documents/${saved.doc.id}/finalize`);
       }
@@ -221,10 +224,7 @@ export function DocumentEditorPage() {
 
   const setDate = (v: string | null) => {
     if (!v) return;
-    const p: Partial<Document> = { date: v };
-    if (isInvoiceLike && doc.payment_terms_days != null) p.due_date = dayjs(v).add(doc.payment_terms_days, 'day').format('YYYY-MM-DD');
-    if (!useRange && doc.service_date === doc.date) p.service_date = v;
-    patch(p);
+    patch(redated(doc, v));
   };
 
   const finalize = () => {
@@ -232,14 +232,12 @@ export function DocumentEditorPage() {
       notifyError(new Error('Bitte mindestens eine Position erfassen.'));
       return;
     }
-    confirmAction({
-      title: `${label} abschließen`,
-      message: isInvoiceLike
-        ? `Die ${label} erhält eine fortlaufende Nummer und wird gebucht. Nach dem Abschließen kann sie nicht mehr geändert, sondern nur noch storniert werden (GoBD). Gesamtbetrag: ${money(totals?.gross ?? 0)}.`
-        : `Das Dokument erhält eine fortlaufende Nummer und kann anschließend als PDF versendet werden.`,
-      confirmLabel: 'Abschließen',
-      onConfirm: () => save.mutate({ finalize: true }),
-    });
+    setFinalizeOpen(true);
+  };
+  const daysOld = dayjs(today()).diff(dayjs(doc.date), 'day');
+  const confirmFinalize = (redate?: string) => {
+    setFinalizeOpen(false);
+    save.mutate({ finalize: true, redate });
   };
 
   const insertInto = (field: 'intro_text' | 'closing_text', text: string) => patch({ [field]: (doc[field] ? doc[field] + ' ' : '') + text } as Partial<Document>);
@@ -464,6 +462,51 @@ export function DocumentEditorPage() {
           </Button>
         </Group>
       </Modal>
+      <Modal opened={finalizeOpen} onClose={() => setFinalizeOpen(false)} title={<Text fw={650}>{label} abschließen</Text>}>
+        <Stack gap="sm">
+          <Text size="sm">
+            {isInvoiceLike
+              ? `Die ${label} erhält eine fortlaufende Nummer und wird gebucht. Nach dem Abschließen kann sie nicht mehr geändert, sondern nur noch storniert werden (GoBD).`
+              : 'Das Dokument erhält eine fortlaufende Nummer und kann anschließend als PDF versendet werden.'}
+          </Text>
+          <Text size="sm">
+            Datum <b>{fmtDate(doc.date)}</b>
+            {isInvoiceLike && doc.due_date ? ` · fällig ${fmtDate(doc.due_date)}` : ''}
+            {isInvoiceLike ? ` · Gesamtbetrag ${money(totals?.gross ?? 0)}` : ''}
+          </Text>
+          {daysOld > 0 && (
+            <Alert color="yellow" icon={<IconInfoCircle size={16} />} p="sm">
+              <Text size="sm">
+                Das Datum liegt {daysOld === 1 ? 'einen Tag' : `${daysOld} Tage`} zurück. Soll das Dokument mit dem heutigen Datum abgeschlossen werden?
+              </Text>
+            </Alert>
+          )}
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setFinalizeOpen(false)}>
+              Abbrechen
+            </Button>
+            {daysOld > 0 ? (
+              <>
+                <Button variant="default" onClick={() => confirmFinalize()}>
+                  Mit {fmtDate(doc.date)} abschließen
+                </Button>
+                <Button onClick={() => confirmFinalize(today())}>Auf heute setzen und abschließen</Button>
+              </>
+            ) : (
+              <Button onClick={() => confirmFinalize()}>Abschließen</Button>
+            )}
+          </Group>
+        </Stack>
+      </Modal>
     </Page>
   );
+}
+
+/** Moves a document to another date: the due date follows the payment terms, a single service date
+ *  that equals the old date moves along. */
+function redated(d: Document, v: string): Partial<Document> {
+  const p: Partial<Document> = { date: v };
+  if ((d.doc_type === 'invoice' || d.doc_type === 'credit_note') && d.payment_terms_days != null) p.due_date = dayjs(v).add(d.payment_terms_days, 'day').format('YYYY-MM-DD');
+  if (!d.service_date_end && d.service_date === d.date) p.service_date = v;
+  return p;
 }
