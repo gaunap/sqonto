@@ -30,6 +30,8 @@ pub struct SystemStatus {
     pub version: String,
     pub data_dir: String,
     pub chart: String,
+    /// The chart can no longer be switched (accounts are in use).
+    pub chart_locked: bool,
     pub bookkeeping: String,
     pub small_business: bool,
     pub company_name: String,
@@ -55,6 +57,7 @@ pub async fn status(State(st): State<AppState>) -> ApiResult<SystemStatus> {
             version: env!("CARGO_PKG_VERSION").into(),
             data_dir: st.data_dir.display().to_string(),
             chart: s.tax.chart.clone(),
+            chart_locked: cfg::chart_in_use(c)?,
             bookkeeping: s.tax.bookkeeping.clone(),
             small_business: s.tax.small_business,
             company_name: s.company.name.clone(),

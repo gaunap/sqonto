@@ -288,9 +288,9 @@ function TaxTab({ s, patch }: { s: Settings; patch: Patch }) {
             ]}
             value={t.chart}
             onChange={(v) => set({ chart: v ?? 'SKR03' })}
-            description={status?.has_data ? 'Kann nach dem Erfassen von Buchungen nicht mehr geändert werden' : undefined}
+            description={status?.chart_locked ? 'Kann nicht mehr geändert werden, sobald Zahlungskonten, Belege oder Buchungen angelegt sind' : undefined}
             inputWrapperOrder={['label', 'input', 'description', 'error']}
-            disabled={status?.has_data}
+            disabled={status?.chart_locked}
           />
           <NumberInput label="Standard-Umsatzsteuersatz" suffix=" %" value={t.default_tax_rate} onChange={(v) => set({ default_tax_rate: Number(v) || 19 })} />
         </SimpleGrid>

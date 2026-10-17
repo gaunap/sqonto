@@ -109,12 +109,16 @@ pub fn seed_accounts(conn: &Connection, chart_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Switching the chart is only allowed while no bookings reference accounts.
-pub fn change_chart(conn: &Connection, chart_name: &str) -> Result<()> {
+/// The chart can only be switched while no bookings, receipts or payment accounts use accounts.
+pub fn chart_in_use(conn: &Connection) -> Result<bool> {
     let used = db::scalar_i64(conn, "SELECT COUNT(*) FROM journal_lines", &[])?
         + db::scalar_i64(conn, "SELECT COUNT(*) FROM receipt_lines", &[])?
         + db::scalar_i64(conn, "SELECT COUNT(*) FROM payment_accounts", &[])?;
-    if used > 0 {
+    Ok(used > 0)
+}
+
+pub fn change_chart(conn: &Connection, chart_name: &str) -> Result<()> {
+    if chart_in_use(conn)? {
         bail_user!("Der Kontenrahmen kann nur geändert werden, solange noch keine Buchungen, Belege oder Zahlungskonten existieren.");
     }
     seed_accounts(conn, chart_name)
