@@ -56,7 +56,7 @@ import {
   IconFlag,
 } from '@tabler/icons-react';
 import { api, downloadFile, openFile } from '@/api/client';
-import { notifyError, useAction, useApi } from '@/api/hooks';
+import { notifyError, useAction, useApi, useSettings } from '@/api/hooks';
 import type { DocumentFull, EinvoiceCheck, IdResponse, Pages } from '@/api/types';
 import { PaymentModal } from '@/components/PaymentModal';
 import { PagesPreview } from '@/components/DocumentParts';
@@ -119,10 +119,19 @@ function PartialModal({ opened, onClose, doc }: { opened: boolean; onClose: () =
 }
 
 function DunningModal({ opened, onClose, doc }: { opened: boolean; onClose: () => void; doc: DocumentFull }) {
+  // Levels, names and fees as configured in Einstellungen → Mahnwesen.
+  const { data: settings } = useSettings();
+  const levels = [...(settings?.dunning.levels ?? [])].sort((a, b) => a.level - b.level);
+  const maxLevel = levels.length ? levels[levels.length - 1].level : 0;
   const nextLevel = doc.dunnings.length ? Math.max(...doc.dunnings.map((d) => d.level)) + 1 : 0;
-  const [level, setLevel] = useState(String(Math.min(nextLevel, 3)));
+  const [level, setLevel] = useState('0');
   const [pages, setPages] = useState<string[] | undefined>();
   const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (opened && levels.length) setLevel(String(Math.min(nextLevel, maxLevel)));
+    // Only when the dialog opens or the configuration arrives.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opened, levels.length]);
   useEffect(() => {
     if (!opened) return;
     setPages(undefined);
@@ -139,18 +148,18 @@ function DunningModal({ opened, onClose, doc }: { opened: boolean; onClose: () =
       openFile(`/dunning/${r.id}/pdf`);
     },
   });
-  const labels = ['Zahlungserinnerung', '1. Mahnung', '2. Mahnung', 'Letzte Mahnung'];
+  const current = levels.find((l) => String(l.level) === level);
   return (
     <Modal opened={opened} onClose={onClose} size={900} title={<Text fw={650}>Mahnung erstellen – {doc.doc.number}</Text>}>
       <Grid>
         <Grid.Col span={{ base: 12, md: 4 }}>
           <Stack>
-            <SegmentedControl orientation="vertical" fullWidth value={level} onChange={setLevel} data={labels.map((l, i) => ({ value: String(i), label: l }))} />
+            <SegmentedControl orientation="vertical" fullWidth value={level} onChange={setLevel} data={levels.map((l) => ({ value: String(l.level), label: l.name || l.title }))} />
             <Text size="sm" c="dimmed">
-              Offener Betrag {money(doc.open_amount)} · {doc.days_overdue} Tage überfällig. Gebühren und Texte richten sich nach den Mahnstufen in den Einstellungen.
+              Offener Betrag {money(doc.open_amount)} · {doc.days_overdue} Tage überfällig{current && current.fee > 0 ? ` · Gebühr ${money(current.fee)}` : ''}. Gebühren und Texte richten sich nach den Mahnstufen in den Einstellungen.
             </Text>
-            <Button leftSection={<IconBellRinging size={16} />} onClick={() => create.mutate(Number(level))} loading={create.isPending}>
-              {labels[Number(level)]} erstellen
+            <Button leftSection={<IconBellRinging size={16} />} onClick={() => create.mutate(Number(level))} loading={create.isPending} disabled={!current}>
+              {current ? `${current.name || current.title} erstellen` : 'Mahnung erstellen'}
             </Button>
           </Stack>
         </Grid.Col>
