@@ -4,7 +4,7 @@
 
 [package]
 name = "sqonto"
-version = "0.9.1"
+version = "0.9.2"
 edition = "2024"
 description = "Sqonto – lokale Buchhaltungs- und Rechnungssoftware"
 license = "AGPL-3.0-or-later"
