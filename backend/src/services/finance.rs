@@ -63,6 +63,21 @@ pub fn save_account(conn: &Connection, mut a: PaymentAccount) -> Result<i64> {
     if a.kind.is_empty() {
         a.kind = "bank".into();
     }
+    let old = if a.id > 0 { Some(db::get::<PaymentAccount>(conn, a.id)?) } else { None };
+    if let Some(old) = &old {
+        if a.ledger_account.is_empty() {
+            a.ledger_account = old.ledger_account.clone();
+        }
+        // Kind and ledger account determine how the existing movements are booked.
+        let has_movements = db::scalar_i64(conn, "SELECT COUNT(*) FROM transactions WHERE account_id = ?1", &[v(a.id)])? > 0;
+        if has_movements && (a.kind != old.kind || a.ledger_account != old.ledger_account) {
+            bail_user!("Kontoart und Sachkonto können nicht mehr geändert werden, sobald Kontobewegungen erfasst sind.");
+        }
+        if a.opening_balance != old.opening_balance || a.opening_date != old.opening_date {
+            cfg::check_unlocked(conn, old.opening_date)?;
+            cfg::check_unlocked(conn, a.opening_date)?;
+        }
+    }
     if a.ledger_account.is_empty() {
         a.ledger_account = match a.kind.as_str() {
             "cash" => crate::chart::role(&s.tax.chart, "kasse"),
@@ -81,8 +96,7 @@ pub fn save_account(conn: &Connection, mut a: PaymentAccount) -> Result<i64> {
     if a.kind == "cash" && a.opening_balance < Decimal::ZERO {
         bail_user!("Der Kassenbestand darf nicht negativ sein.");
     }
-    let id = if a.id > 0 {
-        let old: PaymentAccount = db::get(conn, a.id)?;
+    let id = if let Some(old) = old {
         a.created_at = old.created_at;
         db::update(conn, &a)?;
         a.id
@@ -878,4 +892,36 @@ pub fn reverse_cash_entry(conn: &Connection, id: i64) -> Result<i64> {
         ..Default::default()
     };
     create(conn, TransactionInput { tx: new_tx, allocations: reversed })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::util::ymd;
+    use rust_decimal_macros::dec;
+
+    #[test]
+    fn payment_account_changes_respect_bookings() {
+        let conn = db::open_memory();
+        cfg::ensure_seeded(&conn).unwrap();
+        let id = save_account(&conn, PaymentAccount { name: "Bank".into(), opening_balance: dec!(1000), opening_date: ymd(2020, 1, 1), ..Default::default() }).unwrap();
+        let acc: PaymentAccount = db::get(&conn, id).unwrap();
+        // Without movements the ledger account may still change.
+        assert!(save_account(&conn, PaymentAccount { ledger_account: "1210".into(), ..acc.clone() }).is_ok());
+        let acc: PaymentAccount = db::get(&conn, id).unwrap();
+        let tx = Transaction { account_id: id, date: ymd(2020, 3, 1), amount: dec!(-10), purpose: "Gebühr".into(), ..Default::default() };
+        create(&conn, TransactionInput { tx, allocations: vec![] }).unwrap();
+
+        assert!(save_account(&conn, PaymentAccount { ledger_account: "1200".into(), ..acc.clone() }).is_err(), "ledger account fixed");
+        assert!(save_account(&conn, PaymentAccount { kind: "other".into(), ..acc.clone() }).is_err(), "kind fixed");
+        // An empty ledger account in an update keeps the current one.
+        assert!(save_account(&conn, PaymentAccount { ledger_account: String::new(), name: "Geschäftskonto".into(), ..acc.clone() }).is_ok());
+        assert_eq!(db::get::<PaymentAccount>(&conn, id).unwrap().ledger_account, "1210");
+
+        cfg::lock_until(&conn, ymd(2020, 12, 31)).unwrap();
+        let acc: PaymentAccount = db::get(&conn, id).unwrap();
+        assert!(save_account(&conn, PaymentAccount { opening_balance: dec!(2000), ..acc.clone() }).is_err(), "opening balance in locked period");
+        assert!(save_account(&conn, PaymentAccount { opening_date: ymd(2021, 1, 1), ..acc.clone() }).is_err(), "moving the opening out of the locked period");
+        assert!(save_account(&conn, PaymentAccount { iban: "DE02120300000000202051".into(), archived: true, ..acc }).is_ok(), "master data stays editable");
+    }
 }
