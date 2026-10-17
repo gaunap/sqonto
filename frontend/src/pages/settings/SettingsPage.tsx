@@ -3,6 +3,7 @@
 // See LICENSE in the project root for the full license and warranty disclaimer.
 
 import { useEffect, useState } from 'react';
+import dayjs from 'dayjs';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router';
 import {
@@ -12,6 +13,7 @@ import {
   Box,
   Button,
   Card,
+  Checkbox,
   FileButton,
   Grid,
   Group,
@@ -59,10 +61,10 @@ import {
 } from '@tabler/icons-react';
 import { api, apiUrl, downloadFile } from '@/api/client';
 import { notifyError, useAction, useApi, useLayouts, usePaymentAccounts, useSettings, useStatus } from '@/api/hooks';
-import type { FileMeta, Layout, MessageResponse, NumberRange, PaymentAccount, Settings } from '@/api/types';
+import type { DocumentListItem, FileMeta, Layout, MessageResponse, NumberRange, PaymentAccount, Settings, TransactionView } from '@/api/types';
 import { DateField, MoneyInput } from '@/components/inputs';
 import { Page, PageHeader, SqontoLogo, UnsavedChangesGuard, confirmAction } from '@/components/ui';
-import { date, money } from '@/lib/format';
+import { date, money, today } from '@/lib/format';
 import { BOOKKEEPING, COUNTRIES, EINVOICE_FORMATS } from '@/lib/labels';
 import { PaymentAccountModal } from '../banking/BankPage';
 
@@ -159,9 +161,90 @@ function CompanyTab({ s, patch }: { s: Settings; patch: Patch }) {
 /** Legal forms that are merchants by law (Kaufleute) and must keep double-entry books. */
 const MERCHANT_FORMS = ['GmbH', 'UG (haftungsbeschränkt)', 'GmbH & Co. KG', 'KG', 'OHG', 'e.K.', 'AG'];
 
+/** Festschreibung: extends the locked period after a confirmation. It can never be lifted. */
+function LockCard({ locked }: { locked: string | null }) {
+  const [open, setOpen] = useState(false);
+  const [until, setUntil] = useState<string | null>(null);
+  const [understood, setUnderstood] = useState(false);
+  const minDate = locked ? dayjs(locked).add(1, 'day').format('YYYY-MM-DD') : undefined;
+  const lastMonthEnd = dayjs().subtract(1, 'month').endOf('month').format('YYYY-MM-DD');
+  const show = () => {
+    setUntil(!locked || lastMonthEnd > locked ? lastMonthEnd : null);
+    setUnderstood(false);
+    setOpen(true);
+  };
+  const valid = !!until && until <= today() && (!locked || until > locked);
+  const { data: drafts } = useApi<DocumentListItem[]>('/documents', { status: 'draft', to: until }, { enabled: open && valid });
+  const { data: openTx } = useApi<TransactionView[]>('/transactions', { status: 'open', to: until }, { enabled: open && valid });
+  const draftCount = (drafts ?? []).filter((d) => d.doc_type === 'invoice' || d.doc_type === 'credit_note').length;
+  const lock = useAction((d: string) => api.post<Settings>('/settings/lock', { until: d }), {
+    success: (_r, d) => `Festgeschrieben bis einschließlich ${date(d)}`,
+    onSuccess: () => setOpen(false),
+  });
+  return (
+    <Card>
+      <Group gap="sm" mb="sm">
+        <ThemeIcon variant="light" color="orange">
+          <IconLock size={16} />
+        </ThemeIcon>
+        <Text fw={650}>Festschreibung (GoBD)</Text>
+        {locked && (
+          <Badge variant="light" color="orange">
+            bis {date(locked)}
+          </Badge>
+        )}
+      </Group>
+      <Text size="sm" c="dimmed" mb="sm">
+        Festgeschriebene Zeiträume können nicht mehr verändert werden – z. B. nach Abgabe der Umsatzsteuer-Voranmeldung oder des Jahresabschlusses. Eine Festschreibung kann später nur verlängert, aber weder verkürzt noch aufgehoben werden.
+      </Text>
+      <Group justify="space-between" align="center">
+        <Text size="sm">{locked ? <>Festgeschrieben bis einschließlich <b>{date(locked)}</b></> : 'Noch kein Zeitraum festgeschrieben.'}</Text>
+        <Button variant="light" color="orange" leftSection={<IconLock size={16} />} onClick={show} disabled={!!locked && locked >= today()}>
+          Zeitraum festschreiben …
+        </Button>
+      </Group>
+      <Modal opened={open} onClose={() => setOpen(false)} title={<Text fw={650}>Zeitraum festschreiben</Text>}>
+        <Stack>
+          <DateField label="Festschreiben bis einschließlich" value={until} onChange={setUntil} minDate={minDate} maxDate={today()} required />
+          {valid && draftCount > 0 && (
+            <Alert color="yellow" icon={<IconAlertTriangle size={16} />} p="sm">
+              <Text size="sm">
+                {draftCount === 1 ? 'Ein Rechnungsentwurf' : `${draftCount} Rechnungsentwürfe`} mit Datum bis {date(until)} {draftCount === 1 ? 'kann' : 'können'} danach nicht mehr abgeschlossen werden.
+              </Text>
+            </Alert>
+          )}
+          {valid && (openTx?.length ?? 0) > 0 && (
+            <Alert color="yellow" icon={<IconAlertTriangle size={16} />} p="sm">
+              <Text size="sm">
+                {openTx!.length === 1 ? 'Eine Kontobewegung' : `${openTx!.length} Kontobewegungen`} bis {date(until)} {openTx!.length === 1 ? 'ist' : 'sind'} noch nicht zugeordnet und {openTx!.length === 1 ? 'kann' : 'können'} danach nicht mehr gebucht werden.
+              </Text>
+            </Alert>
+          )}
+          <Checkbox
+            label="Mir ist bewusst, dass Buchungen bis zu diesem Tag danach nicht mehr geändert werden können und die Festschreibung nicht rückgängig zu machen ist."
+            checked={understood}
+            onChange={(e) => setUnderstood(e.currentTarget.checked)}
+          />
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setOpen(false)}>
+              Abbrechen
+            </Button>
+            <Button color="orange" leftSection={<IconLock size={16} />} disabled={!valid || !understood} loading={lock.isPending} onClick={() => until && lock.mutate(until)}>
+              Festschreiben
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+    </Card>
+  );
+}
+
 function TaxTab({ s, patch }: { s: Settings; patch: Patch }) {
   const { data: status } = useStatus();
+  const { data: saved } = useSettings();
   const t = s.tax;
+  // The lock is changed outside the form, so the saved state is authoritative.
+  const locked = saved ? saved.tax.locked_until : t.locked_until;
   const set = (p: Partial<Settings['tax']>) => patch((x) => ({ ...x, tax: { ...x.tax, ...p } }));
   const rebuild = useAction(() => api.post<MessageResponse>('/system/rebuild'), { success: (r) => r.message });
   return (
@@ -173,7 +256,7 @@ function TaxTab({ s, patch }: { s: Settings; patch: Patch }) {
         <Radio.Group value={t.bookkeeping} onChange={(v) => set({ bookkeeping: v })}>
           <SimpleGrid cols={{ base: 1, sm: 2 }}>
             {BOOKKEEPING.map((b) => (
-              <Radio.Card key={b.value} value={b.value} p="md" radius="md" disabled={!!t.locked_until}>
+              <Radio.Card key={b.value} value={b.value} p="md" radius="md" disabled={!!locked}>
                 <Group wrap="nowrap" align="flex-start">
                   <Radio.Indicator />
                   <div>
@@ -217,7 +300,7 @@ function TaxTab({ s, patch }: { s: Settings; patch: Patch }) {
           Umsatzsteuer
         </Text>
         <Stack gap="sm">
-          <Switch label="Kleinunternehmer nach § 19 UStG" description="Es wird keine Umsatzsteuer ausgewiesen und keine Vorsteuer abgezogen" checked={t.small_business} onChange={(e) => set({ small_business: e.currentTarget.checked })} disabled={!!t.locked_until} />
+          <Switch label="Kleinunternehmer nach § 19 UStG" description="Es wird keine Umsatzsteuer ausgewiesen und keine Vorsteuer abgezogen" checked={t.small_business} onChange={(e) => set({ small_business: e.currentTarget.checked })} disabled={!!locked} />
           <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
             <Select
               label="Voranmeldungszeitraum"
@@ -236,20 +319,7 @@ function TaxTab({ s, patch }: { s: Settings; patch: Patch }) {
           </Text>
         </Stack>
       </Card>
-      <Card>
-        <Group gap="sm" mb="sm">
-          <ThemeIcon variant="light" color="orange">
-            <IconLock size={16} />
-          </ThemeIcon>
-          <Text fw={650}>Festschreibung (GoBD)</Text>
-        </Group>
-        <Text size="sm" c="dimmed" mb="sm">
-          Festgeschriebene Zeiträume können nicht mehr verändert werden – z. B. nach Abgabe der Umsatzsteuer-Voranmeldung oder des Jahresabschlusses.
-        </Text>
-        <Group align="flex-end">
-          <DateField label="Festgeschrieben bis einschließlich" value={t.locked_until} onChange={(v) => set({ locked_until: v })} clearable w={260} />
-        </Group>
-      </Card>
+      <LockCard locked={locked} />
       <Card>
         <Text fw={650} mb={4}>
           Buchungen neu erzeugen

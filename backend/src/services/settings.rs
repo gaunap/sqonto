@@ -154,6 +154,26 @@ pub fn activities(conn: &Connection, entity: &str, entity_id: i64) -> Result<Vec
     )
 }
 
+/// Festschreibung: extends the locked period up to and including `until`. A lock can never be
+/// shortened or lifted, so bookings of a locked period stay unchanged (GoBD).
+pub fn lock_until(conn: &Connection, until: NaiveDate) -> Result<Settings> {
+    let mut s = load(conn)?;
+    if until > crate::util::today() {
+        bail_user!("Festschreiben ist höchstens bis zum heutigen Tag möglich.");
+    }
+    if let Some(locked) = s.tax.locked_until
+        && until <= locked
+    {
+        bail_user!(
+            "Der Zeitraum bis {} ist bereits festgeschrieben. Eine Festschreibung kann weder verkürzt noch aufgehoben werden.",
+            crate::util::fmt_date(locked)
+        );
+    }
+    s.tax.locked_until = Some(until);
+    save(conn, &s)?;
+    Ok(s)
+}
+
 /// Rejects changes to bookings within a locked (festgeschriebenen) period.
 pub fn check_unlocked(conn: &Connection, date: NaiveDate) -> Result<()> {
     let s = load(conn)?;
@@ -172,6 +192,22 @@ pub fn check_unlocked(conn: &Connection, date: NaiveDate) -> Result<()> {
 mod tests {
     use super::*;
     use crate::util::ymd;
+
+    #[test]
+    fn lock_only_moves_forward() {
+        let conn = db::open_memory();
+        ensure_seeded(&conn).unwrap();
+        let t = crate::util::today();
+        assert!(lock_until(&conn, t + chrono::Duration::days(1)).is_err(), "no lock into the future");
+        let first = t - chrono::Duration::days(30);
+        assert_eq!(lock_until(&conn, first).unwrap().tax.locked_until, Some(first));
+        assert!(lock_until(&conn, first).is_err(), "same date again");
+        assert!(lock_until(&conn, first - chrono::Duration::days(1)).is_err(), "no shortening");
+        assert_eq!(load(&conn).unwrap().tax.locked_until, Some(first));
+        assert!(check_unlocked(&conn, first).is_err());
+        assert!(check_unlocked(&conn, first + chrono::Duration::days(1)).is_ok());
+        assert_eq!(lock_until(&conn, t).unwrap().tax.locked_until, Some(t));
+    }
 
     #[test]
     fn number_format() {

@@ -66,6 +66,7 @@ export type * from './LayoutConfig';
 export type * from './LayoutPreviewRequest';
 export type * from './Ledger';
 export type * from './LedgerRow';
+export type * from './LockRequest';
 export type * from './ManualEntry';
 export type * from './MatchSuggestion';
 export type * from './MessageResponse';

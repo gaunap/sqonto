@@ -7,7 +7,7 @@ use std::io::{Read, Write};
 use axum::Json;
 use axum::extract::{Multipart, Path, Query, State};
 use axum::response::Response;
-use chrono::Datelike;
+use chrono::{Datelike, NaiveDate};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -91,6 +91,8 @@ pub async fn put_settings(State(st): State<AppState>, Json(mut new): Json<Settin
             cfg::change_chart(c, &new.tax.chart)?;
         }
         new.onboarded = old.onboarded || new.onboarded;
+        // The locked period only changes through `lock_period`.
+        new.tax.locked_until = old.tax.locked_until;
         sanitize_refs(c, &mut new)?;
         if new.dunning.levels.is_empty() {
             new.dunning.levels = old.dunning.levels.clone();
@@ -127,6 +129,17 @@ pub async fn put_getting_started(State(st): State<AppState>, Json(input): Json<G
 
 #[derive(Deserialize, TS)]
 #[ts(export)]
+pub struct LockRequest {
+    pub until: NaiveDate,
+}
+
+/// Festschreibung (GoBD): extends the locked period; it can never be shortened or lifted.
+pub async fn lock_period(State(st): State<AppState>, Json(req): Json<LockRequest>) -> ApiResult<Settings> {
+    st.write(|c| cfg::lock_until(c, req.until)).map(Json)
+}
+
+#[derive(Deserialize, TS)]
+#[ts(export)]
 pub struct OnboardingInput {
     pub settings: Settings,
     pub bank_name: String,
@@ -147,6 +160,7 @@ pub async fn onboarding(State(st): State<AppState>, Json(input): Json<Onboarding
             cfg::change_chart(c, &s.tax.chart)?;
         }
         s.onboarded = true;
+        s.tax.locked_until = current.tax.locked_until;
         sanitize_refs(c, &mut s)?;
         if s.dunning.levels.is_empty() {
             s.dunning = DunningSettings::default();

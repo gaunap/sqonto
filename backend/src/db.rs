@@ -29,6 +29,15 @@ pub fn open(path: &Path) -> Result<Connection> {
     Ok(conn)
 }
 
+/// Fresh in-memory database with schema, for tests.
+#[cfg(test)]
+pub fn open_memory() -> Connection {
+    let conn = Connection::open_in_memory().expect("in-memory database");
+    conn.pragma_update(None, "foreign_keys", "ON").expect("pragma");
+    migrate(&conn).expect("schema");
+    conn
+}
+
 fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(SCHEMA)?;
     let version: Option<String> = conn
