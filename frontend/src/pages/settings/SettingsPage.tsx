@@ -61,10 +61,10 @@ import {
 } from '@tabler/icons-react';
 import { api, apiUrl, downloadFile } from '@/api/client';
 import { notifyError, useAction, useApi, useLayouts, usePaymentAccounts, useSettings, useStatus } from '@/api/hooks';
-import type { DocumentListItem, FileMeta, Layout, MessageResponse, NumberRange, PaymentAccount, Settings, TransactionView } from '@/api/types';
+import type { BackupStatus, DocumentListItem, FileMeta, Layout, MessageResponse, NumberRange, PaymentAccount, Settings, TransactionView } from '@/api/types';
 import { DateField, MoneyInput } from '@/components/inputs';
 import { Page, PageHeader, SqontoLogo, UnsavedChangesGuard, confirmAction } from '@/components/ui';
-import { date, money, today } from '@/lib/format';
+import { date, dateTime, money, today } from '@/lib/format';
 import { BOOKKEEPING, COUNTRIES, EINVOICE_FORMATS } from '@/lib/labels';
 import { PaymentAccountModal } from '../banking/BankPage';
 
@@ -630,7 +630,49 @@ function AccountsTab() {
   );
 }
 
-function DataTab() {
+/** Daily automatic backup (settings are saved with the form, the status comes from the backend). */
+function AutoBackupCard({ s, patch }: { s: Settings; patch: Patch }) {
+  const b = s.backup;
+  const set = (p: Partial<Settings['backup']>) => patch((x) => ({ ...x, backup: { ...x.backup, ...p } }));
+  const { data: info } = useApi<BackupStatus>('/system/backups');
+  const run = useAction(() => api.post<BackupStatus>('/system/backups'), { success: (r) => `Sicherung erstellt in ${r.folder}` });
+  return (
+    <Card>
+      <Group gap="sm" mb="xs">
+        <IconRefresh size={18} />
+        <Text fw={650}>Automatische Sicherung</Text>
+      </Group>
+      <Text size="sm" c="dimmed" mb="sm">
+        Sqonto legt einmal täglich eine vollständige Sicherung an und behält die neuesten. Zum Schutz vor einem Festplattenausfall einen Ordner auf einem anderen Laufwerk oder in einem Cloud-Ordner wählen.
+      </Text>
+      <Stack gap="sm">
+        <Switch label="Täglich automatisch sichern" checked={b.enabled} onChange={(e) => set({ enabled: e.currentTarget.checked })} />
+        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+          <TextInput
+            label="Ordner"
+            placeholder={info?.default_folder}
+            description="Leer lassen für „backups“ im Datenordner"
+            inputWrapperOrder={['label', 'input', 'description', 'error']}
+            value={b.folder}
+            onChange={(e) => set({ folder: e.currentTarget.value })}
+          />
+          <NumberInput label="Aufbewahrte Sicherungen" min={1} max={365} value={b.keep} onChange={(v) => set({ keep: Number(v) || 30 })} />
+        </SimpleGrid>
+        <Group justify="space-between">
+          <Text size="sm" c="dimmed">
+            {info?.last_at ? `Letzte Sicherung: ${dateTime(info.last_at)}` : 'Noch keine automatische Sicherung'}
+            {info ? ` · ${info.count} im Ordner ${info.folder}` : ''}
+          </Text>
+          <Button variant="light" leftSection={<IconArchive size={16} />} onClick={() => run.mutate()} loading={run.isPending}>
+            Jetzt sichern
+          </Button>
+        </Group>
+      </Stack>
+    </Card>
+  );
+}
+
+function DataTab({ s, patch }: { s: Settings; patch: Patch }) {
   const navigate = useNavigate();
   const { data: status } = useStatus();
   const [resetOpen, setResetOpen] = useState(false);
@@ -684,6 +726,7 @@ function DataTab() {
           </FileButton>
         </Group>
       </Card>
+      <AutoBackupCard s={s} patch={patch} />
       <Card>
         <Text fw={650} mb={4}>
           Demodaten
@@ -824,7 +867,7 @@ const TABS = [
   { value: 'mahnwesen', label: 'Mahnwesen', icon: IconBell, saves: true },
   { value: 'konten', label: 'Zahlungskonten', icon: IconBuildingBank, saves: false },
   { value: 'uebersicht', label: 'Übersicht', icon: IconHome2, saves: true },
-  { value: 'daten', label: 'Daten & Sicherung', icon: IconDatabase, saves: false },
+  { value: 'daten', label: 'Daten & Sicherung', icon: IconDatabase, saves: true },
   { value: 'info', label: 'Über Sqonto', icon: IconInfoCircle, saves: false },
 ];
 
@@ -880,7 +923,7 @@ export function SettingsPage() {
           {current.value === 'mahnwesen' && <DunningTab s={s} patch={patch} />}
           {current.value === 'konten' && <AccountsTab />}
           {current.value === 'uebersicht' && <OverviewTab s={s} patch={patch} />}
-          {current.value === 'daten' && <DataTab />}
+          {current.value === 'daten' && <DataTab s={s} patch={patch} />}
           {current.value === 'info' && <AboutTab />}
         </>
       )}

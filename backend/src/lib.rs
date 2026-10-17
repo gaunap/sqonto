@@ -106,22 +106,32 @@ pub async fn launch(port: u16, dir: &Path) -> anyhow::Result<Launch> {
     let pdf = pdf::PdfEngine::new();
     tracing::info!("{} Schriftfamilien verfügbar", pdf.families().len());
     let state = AppState(Arc::new(Inner { db: Mutex::new(conn), data_dir: dir.to_path_buf(), pdf }));
-    spawn_afa_check(state.clone());
+    spawn_maintenance(state.clone());
     let app = api::router(state).layer(CompressionLayer::new()).layer(axum::middleware::from_fn(guard::local_only));
     Ok(Launch::Started(Server { listener, app, port, url: format!("http://localhost:{port}"), data_dir: dir.to_path_buf() }))
 }
 
-/// Books the depreciation of a new year once it has started – also when the program keeps
-/// running over New Year (the check itself only does work once per year).
-fn spawn_afa_check(state: AppState) {
+/// Hourly upkeep while the program runs, starting right away: the daily automatic backup and the
+/// depreciation of a new year – also when the program keeps running over New Year. Both only do
+/// work when it is due.
+fn spawn_maintenance(state: AppState) {
     tokio::spawn(async move {
         let mut hourly = tokio::time::interval(Duration::from_secs(3600));
-        hourly.tick().await; // the first tick is immediate; the start already checked
         loop {
             hourly.tick().await;
-            if let Err(e) = state.write(services::posting::ensure_current_afa) {
-                tracing::warn!("Abschreibungen des neuen Jahres: {}", e.message);
-            }
+            let st = state.clone();
+            // Backups read many files – keep them off the async workers.
+            let _ = tokio::task::spawn_blocking(move || {
+                if let Err(e) = st.write(services::posting::ensure_current_afa) {
+                    tracing::warn!("Abschreibungen des neuen Jahres: {}", e.message);
+                }
+                match api::auto_backup(&st, false) {
+                    Ok(Some(path)) => tracing::info!("Automatische Sicherung: {}", path.display()),
+                    Ok(None) => {}
+                    Err(e) => tracing::warn!("Automatische Sicherung fehlgeschlagen: {}", e.message),
+                }
+            })
+            .await;
         }
     });
 }

@@ -876,4 +876,23 @@ pub struct Settings {
     pub dunning: DunningSettings,
     /// Hides the "Erste Schritte" checklist on the dashboard.
     pub hide_getting_started: bool,
+    pub backup: BackupSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(default)]
+#[ts(export)]
+pub struct BackupSettings {
+    /// Daily automatic backup.
+    pub enabled: bool,
+    /// Target folder; empty = `backups` in the data folder.
+    pub folder: String,
+    /// Number of automatic backups that are kept.
+    pub keep: i64,
+}
+
+impl Default for BackupSettings {
+    fn default() -> Self {
+        Self { enabled: true, folder: String::new(), keep: 30 }
+    }
 }

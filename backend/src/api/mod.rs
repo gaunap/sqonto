@@ -11,6 +11,8 @@ mod masterdata;
 mod reports;
 mod system;
 
+pub(crate) use system::auto_backup;
+
 use axum::Router;
 use axum::body::Body;
 use axum::extract::DefaultBodyLimit;
@@ -32,6 +34,7 @@ pub fn router(state: AppState) -> Router {
         .route("/system/demo", post(system::demo))
         .route("/system/rebuild", post(system::rebuild))
         .route("/system/backup", get(system::backup))
+        .route("/system/backups", get(system::backups).post(system::run_backup))
         .route("/system/restore", post(system::restore))
         .route("/system/reset", post(system::reset))
         .route("/settings", get(system::get_settings).put(system::put_settings))

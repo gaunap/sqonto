@@ -101,6 +101,10 @@ pub async fn put_settings(State(st): State<AppState>, Json(mut new): Json<Settin
         if new.dunning.levels.is_empty() {
             new.dunning.levels = old.dunning.levels.clone();
         }
+        let folder = new.backup.folder.trim();
+        if !folder.is_empty() && (!std::path::Path::new(folder).is_absolute() || std::fs::create_dir_all(folder).is_err()) {
+            crate::bail_user!("Der Sicherungsordner „{folder}“ ist nicht verfügbar. Bitte einen vollständigen Pfad zu einem beschreibbaren Ordner angeben.");
+        }
         let rebuild = new.tax.bookkeeping != old.tax.bookkeeping || new.tax.small_business != old.tax.small_business;
         if rebuild && old.tax.locked_until.is_some() {
             crate::bail_user!("Buchführungsart und Kleinunternehmerstatus können nach einer Festschreibung nicht mehr geändert werden.");
@@ -246,30 +250,121 @@ pub async fn backup(State(st): State<AppState>) -> Result<Response, AppError> {
 
 /// ZIP with a consistent copy of the database and all stored files.
 fn backup_zip(st: &AppState) -> Result<Vec<u8>, AppError> {
+    let mut buf = std::io::Cursor::new(Vec::new());
+    write_backup(st, &mut buf)?;
+    Ok(buf.into_inner())
+}
+
+fn write_backup<W: Write + std::io::Seek>(st: &AppState, out: W) -> Result<(), AppError> {
     let tmp = st.data_dir.join(format!("backup-{}.db", uuid::Uuid::new_v4()));
     {
         let conn = st.db();
         conn.execute("VACUUM INTO ?1", [tmp.display().to_string()]).map_err(AppError::from)?;
     }
-    let db_bytes = std::fs::read(&tmp).map_err(AppError::from)?;
-    let _ = std::fs::remove_file(&tmp);
-    let mut buf = std::io::Cursor::new(Vec::new());
-    {
-        let mut zip = zip::ZipWriter::new(&mut buf);
+    let result = (|| -> anyhow::Result<()> {
+        let mut zip = zip::ZipWriter::new(out);
         let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-        zip.start_file("sqonto.db", opts).map_err(AppError::from)?;
-        zip.write_all(&db_bytes).map_err(AppError::from)?;
+        zip.start_file("sqonto.db", opts)?;
+        std::io::copy(&mut std::fs::File::open(&tmp)?, &mut zip)?;
         if let Ok(entries) = std::fs::read_dir(st.files_dir()) {
             for e in entries.flatten() {
-                if let Ok(bytes) = std::fs::read(e.path()) {
-                    zip.start_file(format!("files/{}", e.file_name().to_string_lossy()), opts).map_err(AppError::from)?;
-                    zip.write_all(&bytes).map_err(AppError::from)?;
+                if let Ok(mut f) = std::fs::File::open(e.path()) {
+                    zip.start_file(format!("files/{}", e.file_name().to_string_lossy()), opts)?;
+                    std::io::copy(&mut f, &mut zip)?;
                 }
             }
         }
-        zip.finish().map_err(AppError::from)?;
+        zip.finish()?;
+        Ok(())
+    })();
+    let _ = std::fs::remove_file(&tmp);
+    result.map_err(AppError::from)
+}
+
+const AUTO_BACKUP_PREFIX: &str = "Sqonto-Sicherung-";
+
+fn backup_folder(st: &AppState, s: &Settings) -> std::path::PathBuf {
+    let folder = s.backup.folder.trim();
+    if folder.is_empty() { st.data_dir.join("backups") } else { std::path::PathBuf::from(folder) }
+}
+
+fn is_auto_backup(name: &str) -> bool {
+    name.starts_with(AUTO_BACKUP_PREFIX) && name.ends_with(".zip")
+}
+
+/// Daily automatic backup into the backup folder (`force`: right now, even if today's exists).
+/// Returns the written file, or None if nothing was due.
+pub fn auto_backup(st: &AppState, force: bool) -> Result<Option<std::path::PathBuf>, AppError> {
+    let s = st.read(cfg::load)?;
+    if !force && (!s.backup.enabled || !s.onboarded) {
+        return Ok(None);
     }
-    Ok(buf.into_inner())
+    let dir = backup_folder(st, &s);
+    std::fs::create_dir_all(&dir).map_err(|e| AppError::bad(format!("Der Sicherungsordner {} ist nicht verfügbar: {e}", dir.display())))?;
+    let now = chrono::Local::now();
+    let today = format!("{AUTO_BACKUP_PREFIX}{}", now.format("%Y-%m-%d"));
+    let exists = std::fs::read_dir(&dir).map_err(AppError::from)?.flatten().any(|e| e.file_name().to_string_lossy().starts_with(&today));
+    if exists && !force {
+        return Ok(None);
+    }
+    let name = if exists { format!("{AUTO_BACKUP_PREFIX}{}.zip", now.format("%Y-%m-%d_%H%M%S")) } else { format!("{today}.zip") };
+    let part = dir.join(format!("{name}.part"));
+    let written = std::fs::File::create(&part).map_err(AppError::from).and_then(|f| write_backup(st, std::io::BufWriter::new(f)));
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&part);
+        return Err(e);
+    }
+    let path = dir.join(&name);
+    std::fs::rename(&part, &path).map_err(AppError::from)?;
+    rotate_backups(&dir, s.backup.keep.max(1) as usize);
+    let last = serde_json::json!({ "at": now_str(), "file": path.display().to_string() }).to_string();
+    st.write(|c| db::meta_set(c, "last_backup", &last))?;
+    Ok(Some(path))
+}
+
+/// Keeps the newest `keep` automatic backups (their names sort by date); other files stay.
+fn rotate_backups(dir: &std::path::Path, keep: usize) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let mut names: Vec<String> = entries.flatten().map(|e| e.file_name().to_string_lossy().to_string()).filter(|n| is_auto_backup(n)).collect();
+    names.sort();
+    for n in names.iter().take(names.len().saturating_sub(keep)) {
+        let _ = std::fs::remove_file(dir.join(n));
+    }
+}
+
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct BackupStatus {
+    /// Folder the automatic backups go to.
+    pub folder: String,
+    pub default_folder: String,
+    pub last_at: Option<String>,
+    pub last_file: String,
+    pub count: i64,
+}
+
+fn backup_status(st: &AppState) -> Result<BackupStatus, AppError> {
+    let (s, last) = st.read(|c| Ok((cfg::load(c)?, db::meta_get(c, "last_backup")?)))?;
+    let last: serde_json::Value = last.and_then(|l| serde_json::from_str(&l).ok()).unwrap_or_default();
+    let dir = backup_folder(st, &s);
+    let count = std::fs::read_dir(&dir).map(|e| e.flatten().filter(|e| is_auto_backup(&e.file_name().to_string_lossy())).count() as i64).unwrap_or(0);
+    Ok(BackupStatus {
+        folder: dir.display().to_string(),
+        default_folder: st.data_dir.join("backups").display().to_string(),
+        last_at: last["at"].as_str().map(str::to_string),
+        last_file: last["file"].as_str().unwrap_or_default().to_string(),
+        count,
+    })
+}
+
+pub async fn backups(State(st): State<AppState>) -> ApiResult<BackupStatus> {
+    backup_status(&st).map(Json)
+}
+
+pub async fn run_backup(State(st): State<AppState>) -> ApiResult<BackupStatus> {
+    let worker = st.clone();
+    tokio::task::spawn_blocking(move || auto_backup(&worker, true)).await.map_err(|e| AppError::from(anyhow::anyhow!(e)))??;
+    backup_status(&st).map(Json)
 }
 
 /// Name of a stored file inside a backup (`files/<uuid>`). Stored files are always named by their
@@ -560,6 +655,31 @@ mod tests {
         sandbox_upload(&mut resp, mime);
         let get = |n: header::HeaderName| resp.headers().get(n).map(|v| v.to_str().unwrap().to_string());
         (get(header::X_CONTENT_TYPE_OPTIONS), get(header::CONTENT_SECURITY_POLICY))
+    }
+
+    #[test]
+    fn rotation_keeps_the_newest_automatic_backups() {
+        let dir = std::env::temp_dir().join(format!("sqonto-rotate-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for d in ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-03_120000", "2026-01-04"] {
+            std::fs::write(dir.join(format!("{AUTO_BACKUP_PREFIX}{d}.zip")), b"x").unwrap();
+        }
+        std::fs::write(dir.join("Sqonto-vor-Wiederherstellung-2025-12-01_100000.zip"), b"x").unwrap();
+        std::fs::write(dir.join("notizen.txt"), b"x").unwrap();
+        rotate_backups(&dir, 3);
+        let mut left: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        left.sort();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            left,
+            vec![
+                "Sqonto-Sicherung-2026-01-03.zip",
+                "Sqonto-Sicherung-2026-01-03_120000.zip",
+                "Sqonto-Sicherung-2026-01-04.zip",
+                "Sqonto-vor-Wiederherstellung-2025-12-01_100000.zip",
+                "notizen.txt"
+            ]
+        );
     }
 
     #[test]
