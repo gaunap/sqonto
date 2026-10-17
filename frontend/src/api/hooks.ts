@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // See LICENSE in the project root for the full license and warranty disclaimer.
 
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient, type Query } from '@tanstack/react-query';
 import { notifications } from '@mantine/notifications';
 import { api, ApiError } from './client';
 import type {
@@ -35,13 +35,23 @@ interface ActionOptions<TResult, TArgs> {
   errorTitle?: string;
 }
 
+/** Rendered previews (Typst) are expensive and are not changed by the actions shown next to them. */
+const isPreview = (q: Query) => {
+  const key = q.queryKey[0];
+  return key === 'doc-preview' || key === 'layout-preview' || (typeof key === 'string' && key.endsWith('/preview'));
+};
+
 /** Mutation with automatic cache invalidation and notifications. */
 export function useAction<TArgs = void, TResult = unknown>(fn: (args: TArgs) => Promise<TResult>, opts: ActionOptions<TResult, TArgs> = {}) {
   const qc = useQueryClient();
   return useMutation<TResult, ApiError, TArgs>({
     mutationFn: fn,
     onSuccess: (result, args) => {
-      if (opts.invalidate !== false) qc.invalidateQueries();
+      if (opts.invalidate !== false) {
+        qc.invalidateQueries({ predicate: (q) => !isPreview(q) });
+        // Previews only become stale and are rendered again the next time they are shown.
+        qc.invalidateQueries({ predicate: isPreview, refetchType: 'none' });
+      }
       if (opts.success) {
         const message = typeof opts.success === 'function' ? opts.success(result, args) : opts.success;
         notifications.show({ color: 'teal', message, autoClose: 3000 });
