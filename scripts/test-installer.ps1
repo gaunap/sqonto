@@ -45,9 +45,12 @@ try {
     $setup = Start-Process -FilePath $installer -ArgumentList $arguments -WindowStyle Hidden -PassThru -Wait
     if ($setup.ExitCode -ne 0) { throw 'Upgrade failed.' }
     if (!(Test-Path $marker)) { throw 'Upgrade removed user data.' }
-    # Self-update: the setup started by Sqonto starts the updated program again.
-    $setup = Start-Process -FilePath $installer -ArgumentList ($arguments + '/RELAUNCH=server') -WindowStyle Hidden -PassThru -Wait
-    if ($setup.ExitCode -ne 0) { throw 'Update with relaunch failed.' }
+    # Self-update: the setup started by Sqonto starts the updated program again. Not with -Wait:
+    # that also waits for all descendants, i.e. for the relaunched server to exit.
+    $setup = Start-Process -FilePath $installer -ArgumentList ($arguments + '/RELAUNCH=server') -WindowStyle Hidden -PassThru
+    $null = $setup.Handle # keeps the exit code readable after WaitForExit
+    if (!$setup.WaitForExit(300000)) { throw 'Update with relaunch did not finish.' }
+    if ($setup.ExitCode -ne 0) { throw "Update with relaunch failed: $($setup.ExitCode)" }
     $relaunched = $false
     for ($attempt = 0; $attempt -lt 60 -and !$relaunched; $attempt++) {
         try {
