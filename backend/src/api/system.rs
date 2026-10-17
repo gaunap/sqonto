@@ -6,6 +6,7 @@ use std::io::{Read, Write};
 
 use axum::Json;
 use axum::extract::{Multipart, Path, Query, State};
+use axum::http::{HeaderValue, header};
 use axum::response::Response;
 use chrono::{Datelike, NaiveDate};
 use rust_decimal::Decimal;
@@ -432,7 +433,44 @@ pub struct FileQ {
 pub async fn file(State(st): State<AppState>, Path(id): Path<i64>, Query(q): Query<FileQ>) -> Result<Response, AppError> {
     let meta: FileMeta = st.read(|c| db::get(c, id))?;
     let bytes = std::fs::read(st.files_dir().join(&meta.uuid)).map_err(|_| AppError::not_found("Datei nicht gefunden"))?;
-    Ok(file_response(bytes, &meta.mime, &meta.filename, q.download))
+    let mut resp = file_response(bytes, &meta.mime, &meta.filename, q.download);
+    sandbox_upload(&mut resp, &meta.mime);
+    Ok(resp)
+}
+
+/// Uploaded files come from third parties (receipts, e-invoices) and carry the MIME type the
+/// uploader claimed. The browser must not sniff another type, and everything except PDFs (shown by
+/// the browser's PDF viewer) is sandboxed: an HTML or SVG file opened in the app can neither run
+/// scripts nor act on the app's origin.
+fn sandbox_upload(resp: &mut Response, mime: &str) {
+    let h = resp.headers_mut();
+    h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    if !mime.trim().eq_ignore_ascii_case("application/pdf") {
+        h.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn headers(mime: &str) -> (Option<String>, Option<String>) {
+        let mut resp = file_response(b"x".to_vec(), mime, "datei", false);
+        sandbox_upload(&mut resp, mime);
+        let get = |n: header::HeaderName| resp.headers().get(n).map(|v| v.to_str().unwrap().to_string());
+        (get(header::X_CONTENT_TYPE_OPTIONS), get(header::CONTENT_SECURITY_POLICY))
+    }
+
+    #[test]
+    fn uploads_are_sandboxed() {
+        for mime in ["text/html", "image/svg+xml", "application/xml", "image/png", "application/octet-stream", "text/html; charset=utf-8"] {
+            let (nosniff, csp) = headers(mime);
+            assert_eq!(nosniff.as_deref(), Some("nosniff"), "{mime}");
+            assert!(csp.is_some_and(|c| c.contains("sandbox") && c.contains("default-src 'none'")), "{mime}");
+        }
+        // PDFs stay viewable in the browser's PDF viewer (iframe in the receipt editor).
+        assert_eq!(headers("application/pdf"), (Some("nosniff".into()), None));
+    }
 }
 
 // ---------------------------------------------------------------- Layouts
