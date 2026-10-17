@@ -43,6 +43,7 @@ import {
   IconBuilding,
   IconBuildingBank,
   IconCopy,
+  IconCloudDownload,
   IconDatabase,
   IconInfoCircle,
   IconDeviceFloppy,
@@ -70,6 +71,7 @@ import { Page, PageHeader, SqontoLogo, UnsavedChangesGuard, confirmAction } from
 import { date, dateTime, money, today } from '@/lib/format';
 import { BOOKKEEPING, COUNTRIES, EINVOICE_FORMATS } from '@/lib/labels';
 import { PaymentAccountModal } from '../banking/BankPage';
+import { UpdatesTab } from './UpdatesTab';
 
 type Patch = (fn: (s: Settings) => Settings) => void;
 
@@ -1099,6 +1101,7 @@ const TABS = [
   { value: 'konten', label: 'Zahlungskonten', icon: IconBuildingBank, saves: false },
   { value: 'uebersicht', label: 'Übersicht', icon: IconHome2, saves: true },
   { value: 'daten', label: 'Daten & Sicherung', icon: IconDatabase, saves: true },
+  { value: 'updates', label: 'Updates', icon: IconCloudDownload, saves: true },
   { value: 'info', label: 'Über Sqonto', icon: IconInfoCircle, saves: false },
 ];
 
@@ -1156,6 +1159,7 @@ export function SettingsPage() {
           {current.value === 'konten' && <AccountsTab />}
           {current.value === 'uebersicht' && <OverviewTab s={s} patch={patch} />}
           {current.value === 'daten' && <DataTab s={s} patch={patch} />}
+          {current.value === 'updates' && <UpdatesTab s={s} patch={patch} />}
           {current.value === 'info' && <AboutTab />}
         </>
       )}

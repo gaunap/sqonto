@@ -50,3 +50,12 @@ Name: "{autodesktop}\Sqonto"; Filename: "{app}\Sqonto.exe"; WorkingDir: "{app}";
 
 [Run]
 Filename: "{app}\Sqonto.exe"; Description: "{cm:LaunchProgram,Sqonto}"; Flags: nowait postinstall skipifsilent
+; Self-update (backend/src/services/update.rs): /RELAUNCH=desktop|server starts the updated program again.
+Filename: "{app}\Sqonto.exe"; Flags: nowait; Check: Relaunch('desktop')
+Filename: "{app}\sqonto-server.exe"; Flags: nowait; Check: Relaunch('server')
+
+[Code]
+function Relaunch(Kind: String): Boolean;
+begin
+  Result := CompareText(ExpandConstant('{param:relaunch|}'), Kind) = 0;
+end;

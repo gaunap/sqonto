@@ -14,6 +14,7 @@ import type {
   PaymentAccountView,
   Settings,
   SystemStatus,
+  UpdateStatus,
 } from './types';
 
 type Params = Record<string, string | number | boolean | null | undefined>;
@@ -76,3 +77,16 @@ export const useContacts = (role?: string) => useApi<ContactListItem[]>('/contac
 export const useArticles = () => useApi<ArticleListItem[]>('/articles');
 export const useLayouts = () => useApi<Layout[]>('/layouts');
 export const useFonts = () => useApi<FontList>('/fonts');
+
+/** Update check of the backend: polled quickly while an update is installed, otherwise until the check at the start is done. */
+export const useUpdateStatus = (enabled = true) =>
+  useQuery<UpdateStatus, ApiError>({
+    queryKey: ['/system/update', {}],
+    queryFn: () => api.get<UpdateStatus>('/system/update'),
+    enabled,
+    refetchInterval: (q) => {
+      const u = q.state.data;
+      if (u && ['downloading', 'installing', 'restarting'].includes(u.phase)) return 500;
+      return u?.checked_at ? 30 * 60_000 : 5_000;
+    },
+  });

@@ -10,6 +10,7 @@ mod finance;
 mod masterdata;
 mod reports;
 mod system;
+mod update;
 
 pub(crate) use system::auto_backup;
 
@@ -37,6 +38,10 @@ pub fn router(state: AppState) -> Router {
         .route("/system/backups", get(system::backups).post(system::run_backup))
         .route("/system/restore", post(system::restore))
         .route("/system/reset", post(system::reset))
+        .route("/system/update", get(update::status))
+        .route("/system/update/check", post(update::check))
+        .route("/system/update/install", post(update::install))
+        .route("/system/update/skip", post(update::skip))
         .route("/settings", get(system::get_settings).put(system::put_settings))
         .route("/settings/getting-started", put(system::put_getting_started))
         .route("/settings/lock", post(system::lock_period))

@@ -23,3 +23,4 @@ pub mod receipts;
 pub mod recurring;
 pub mod reports;
 pub mod settings;
+pub mod update;

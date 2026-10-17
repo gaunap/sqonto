@@ -12,6 +12,7 @@ import {
   Burger,
   Button,
   Group,
+  Indicator,
   Kbd,
   Loader,
   Center,
@@ -58,6 +59,7 @@ import {
 } from '@tabler/icons-react';
 import { useApi, useStatus } from '@/api/hooks';
 import { SqontoLogo } from '@/components/ui';
+import { useUpdateNotice } from '@/components/UpdateNotice';
 import type { Dashboard, SearchHit } from '@/api/types';
 
 interface NavItem {
@@ -247,6 +249,7 @@ export function AppLayout() {
     drafts: dash?.todos.find((t) => t.kind === 'drafts')?.count ?? 0,
   };
   const sections = useNavSections(counts);
+  const update = useUpdateNotice(!!status?.onboarded);
 
   // Only redirect on fresh data – a stale cached status (e.g. right after onboarding) must not bounce the user back.
   useEffect(() => {
@@ -366,10 +369,12 @@ export function AppLayout() {
               </Menu.Dropdown>
             </Menu>
             <ColorSchemeToggle />
-            <Tooltip label="Einstellungen">
-              <ActionIcon size="lg" variant="default" onClick={() => navigate('/einstellungen')} aria-label="Einstellungen">
-                <IconSettings size={18} />
-              </ActionIcon>
+            <Tooltip label={update ? 'Einstellungen · Update verfügbar' : 'Einstellungen'}>
+              <Indicator disabled={!update} size={9} offset={5} color="brand">
+                <ActionIcon size="lg" variant="default" onClick={() => navigate(update ? '/einstellungen/updates' : '/einstellungen')} aria-label="Einstellungen">
+                  <IconSettings size={18} />
+                </ActionIcon>
+              </Indicator>
             </Tooltip>
           </Group>
         </Group>

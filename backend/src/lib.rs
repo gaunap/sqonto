@@ -79,9 +79,11 @@ pub enum Launch {
 /// other than a Sqonto instance with the same data is skipped.
 pub async fn launch(port: u16, dir: &Path) -> anyhow::Result<Launch> {
     std::fs::create_dir_all(dir.join("files"))?;
+    // Started by an update: the previous process is still shutting down and keeps its port a moment.
+    let restarting = std::env::var_os(services::update::RESTART_ENV).is_some();
     let mut bound = None;
     for p in port..port.saturating_add(20) {
-        match tokio::net::TcpListener::bind(("127.0.0.1", p)).await {
+        match bind(p, restarting && p == port).await {
             Ok(listener) => {
                 bound = Some((listener, p));
                 break;
@@ -107,8 +109,40 @@ pub async fn launch(port: u16, dir: &Path) -> anyhow::Result<Launch> {
     tracing::info!("{} Schriftfamilien verfügbar", pdf.families().len());
     let state = AppState(Arc::new(Inner { db: Mutex::new(conn), data_dir: dir.to_path_buf(), pdf }));
     spawn_maintenance(state.clone());
+    spawn_update_check(state.clone());
     let app = api::router(state).layer(CompressionLayer::new()).layer(axum::middleware::from_fn(guard::local_only));
     Ok(Launch::Started(Server { listener, app, port, url: format!("http://localhost:{port}"), data_dir: dir.to_path_buf() }))
+}
+
+/// Binds the local port; `wait`: retry for up to 30 s while it is still in use.
+async fn bind(port: u16, wait: bool) -> std::io::Result<tokio::net::TcpListener> {
+    let mut attempts = if wait { 120 } else { 0 };
+    loop {
+        match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && attempts > 0 => {
+                attempts -= 1;
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            result => return result,
+        }
+    }
+}
+
+/// Looks for a new version at the start and then daily, unless switched off in the settings.
+fn spawn_update_check(state: AppState) {
+    tokio::spawn(async move {
+        let mut daily = tokio::time::interval(Duration::from_secs(24 * 3600));
+        loop {
+            daily.tick().await;
+            let st = state.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                if st.read(services::settings::load).is_ok_and(|s| s.updates.auto_check) {
+                    services::update::check();
+                }
+            })
+            .await;
+        }
+    });
 }
 
 /// Hourly upkeep while the program runs, starting right away: the daily automatic backup, due
@@ -130,6 +164,7 @@ fn spawn_maintenance(state: AppState) {
                     Ok(_) => {}
                     Err(e) => tracing::warn!("Abo-Rechnungen: {}", e.message),
                 }
+                services::update::cleanup(&st.updates_dir());
                 match api::auto_backup(&st, false) {
                     Ok(Some(path)) => tracing::info!("Automatische Sicherung: {}", path.display()),
                     Ok(None) => {}
@@ -187,6 +222,21 @@ static FOCUS_HANDLER: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
 /// front (the desktop app raises its window).
 pub fn set_focus_handler(f: impl Fn() + Send + Sync + 'static) {
     let _ = FOCUS_HANDLER.set(Box::new(f));
+}
+
+static QUIT_HANDLER: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
+
+/// Registers how the program ends itself after an update (the desktop app closes its window).
+pub fn set_quit_handler(f: impl Fn() + Send + Sync + 'static) {
+    let _ = QUIT_HANDLER.set(Box::new(f));
+}
+
+/// Ends the program for an update; without a handler (headless server) the process exits.
+pub(crate) fn quit() {
+    match QUIT_HANDLER.get() {
+        Some(f) => f(),
+        None => std::process::exit(0),
+    }
 }
 
 /// Called by `POST /api/system/focus`; false if this instance has no window.

@@ -38,6 +38,8 @@ enum UserEvent {
     /// Answer of the page to `UNSAVED_JS` when the window is closed.
     CloseCheck(String),
     Downloaded(PathBuf),
+    /// An update was installed: end, the new version starts itself.
+    Quit,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -83,6 +85,12 @@ fn run(dir: &Path, app_url: String, start_url: String) -> ! {
     sqonto::set_focus_handler(move || {
         if let Ok(p) = focus_proxy.lock() {
             let _ = p.send_event(UserEvent::Focus);
+        }
+    });
+    let quit_proxy = Mutex::new(proxy.clone());
+    sqonto::set_quit_handler(move || {
+        if let Ok(p) = quit_proxy.lock() {
+            let _ = p.send_event(UserEvent::Quit);
         }
     });
 
@@ -148,6 +156,10 @@ fn run(dir: &Path, app_url: String, start_url: String) -> ! {
                     save_state(&window, &state_file);
                     *control_flow = ControlFlow::Exit;
                 }
+            }
+            Event::UserEvent(UserEvent::Quit) => {
+                save_state(&window, &state_file);
+                *control_flow = ControlFlow::Exit;
             }
             Event::UserEvent(UserEvent::Focus) => {
                 window.set_visible(true);

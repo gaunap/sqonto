@@ -57,4 +57,9 @@ impl AppState {
     pub fn files_dir(&self) -> PathBuf {
         self.data_dir.join("files")
     }
+
+    /// Downloaded update packages (removed again after the update).
+    pub fn updates_dir(&self) -> PathBuf {
+        self.data_dir.join("updates")
+    }
 }

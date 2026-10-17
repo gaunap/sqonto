@@ -67,6 +67,13 @@ ersetzen nur die Programmdateien. Auch eine Deinstallation lässt die Daten best
 Beim Wechsel von einer portablen Version Sqonto schließen und den bisherigen `data`-Ordner
 in den Installationsordner kopieren, bevor die installierte Anwendung gestartet wird.
 
+Sqonto fragt beim Start und danach täglich bei GitHub nach einer neuen Version und meldet
+sich, wenn es eine gibt (abschaltbar unter *Einstellungen → Updates*; Buchhaltungsdaten werden
+dabei nicht übertragen). Dort lässt sich das Update auch direkt installieren: Sqonto legt vorher
+eine Sicherung an, lädt das Paket für das eigene System, prüft dessen SHA-256-Prüfsumme und
+startet danach neu – eine Installation über den neuen Installer, portable Programme und
+`.tar.gz`-Archive durch Austausch der Programmdateien.
+
 Die Desktop-Anwendung benötigt die „Microsoft Edge WebView2 Runtime“, die auf vielen
 Windows-Systemen bereits vorhanden ist. Falls sie fehlt, die
 [Evergreen Runtime von Microsoft](https://developer.microsoft.com/microsoft-edge/webview2/)
@@ -132,7 +139,8 @@ Die Build-Skripte verwenden in CI mit `SQONTO_FRONTEND_READY=1` das bereits geba
 (lokale Builds bauen es weiterhin selbst). Unter Linux werden nach dem Paket-Build zusätzlich
 die Bibliothek und der Server ohne Desktop-Features im Release-Profil getestet.
 Unter Windows prüft ein zusätzlicher Test Installation, Start des installierten
-Servers mit eingebettetem Frontend, Update und Datenerhalt bei Deinstallation. Die fertigen
+Servers mit eingebettetem Frontend, Update (auch mit Neustart wie beim Selbst-Update) und
+Datenerhalt bei Deinstallation. Die fertigen
 Pakete können bei jedem erfolgreichen Lauf als Workflow-Artefakte heruntergeladen werden.
 
 Für einen Release:

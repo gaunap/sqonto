@@ -924,6 +924,23 @@ pub struct Settings {
     pub hide_getting_started: bool,
     pub backup: BackupSettings,
     pub email: EmailSettings,
+    pub updates: UpdateSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(default)]
+#[ts(export)]
+pub struct UpdateSettings {
+    /// Look for a new version on GitHub at the start and daily while the program runs.
+    pub auto_check: bool,
+    /// Version the user does not want to be reminded of.
+    pub skipped_version: String,
+}
+
+impl Default for UpdateSettings {
+    fn default() -> Self {
+        Self { auto_check: true, skipped_version: String::new() }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
