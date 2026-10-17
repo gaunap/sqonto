@@ -196,9 +196,29 @@ pub fn save(conn: &Connection, mut a: Asset) -> Result<i64> {
     if a.useful_life_years <= 0 {
         a.useful_life_years = 1;
     }
-    cfg::check_unlocked(conn, a.acquisition_date)?;
-    let id = if a.id > 0 {
-        let old: Asset = db::get(conn, a.id)?;
+    let old = if a.id > 0 { Some(db::get::<Asset>(conn, a.id)?) } else { None };
+    match &old {
+        Some(old) => {
+            // Changes to the schedule rewrite the depreciation since acquisition; a disposal only
+            // affects its own year. Name, number and notes stay editable.
+            let schedule_changed = a.acquisition_date != old.acquisition_date
+                || a.cost != old.cost
+                || a.useful_life_years != old.useful_life_years
+                || a.method != old.method
+                || a.account != old.account;
+            if schedule_changed {
+                cfg::check_unlocked(conn, old.acquisition_date)?;
+                cfg::check_unlocked(conn, a.acquisition_date)?;
+            }
+            if a.disposal_date != old.disposal_date || a.disposal_proceeds != old.disposal_proceeds {
+                for d in [old.disposal_date, a.disposal_date].into_iter().flatten() {
+                    cfg::check_unlocked(conn, d)?;
+                }
+            }
+        }
+        None => cfg::check_unlocked(conn, a.acquisition_date)?,
+    }
+    let id = if let Some(old) = old {
         a.created_at = old.created_at;
         a.number = if a.number.is_empty() { old.number } else { a.number };
         db::update(conn, &a)?;
@@ -304,6 +324,41 @@ mod tests {
         assert_eq!(p.iter().map(|r| r.afa).sum::<Decimal>(), dec!(999.99));
         let g = schedule(&asset(dec!(500), 3, "gwg", ymd(2026, 6, 1)));
         assert_eq!(g[0].afa, dec!(500));
+    }
+
+    #[test]
+    fn lock_protects_past_depreciation_but_allows_disposal() {
+        let conn = db::open_memory();
+        cfg::ensure_seeded(&conn).unwrap();
+        let mut a = asset(dec!(3600), 3, "linear", ymd(2020, 1, 1));
+        a.name = "Laptop".into();
+        a.account = "0420".into();
+        let id = save(&conn, a).unwrap();
+        cfg::lock_until(&conn, ymd(2021, 12, 31)).unwrap();
+        let a: Asset = db::get(&conn, id).unwrap();
+        let afa = |year: &str| -> Decimal {
+            db::query::<crate::models::JournalEntry>(&conn, "WHERE source_type = 'asset' AND source_id = ?1 AND description LIKE ?2", &[v(id), v(format!("AfA {year}%"))])
+                .unwrap()
+                .iter()
+                .map(|e| db::query::<crate::models::JournalLine>(&conn, "WHERE entry_id = ?1", &[v(e.id)]).unwrap().iter().map(|l| l.debit).sum::<Decimal>())
+                .sum()
+        };
+
+        assert!(save(&conn, Asset { cost: dec!(4000), ..a.clone() }).is_err(), "cost of a locked acquisition");
+        assert!(save(&conn, Asset { useful_life_years: 5, ..a.clone() }).is_err(), "useful life");
+        assert!(save(&conn, Asset { acquisition_date: ymd(2022, 1, 1), ..a.clone() }).is_err(), "moving it out of the locked period");
+        assert!(save(&conn, Asset { name: "Notebook".into(), notes: "Inventar 7".into(), ..a.clone() }).is_ok(), "master data");
+        assert!(save(&conn, Asset { disposal_date: Some(ymd(2021, 6, 30)), ..a.clone() }).is_err(), "disposal in the locked period");
+
+        // Sold in 2022: allowed, earlier years keep their depreciation.
+        save(&conn, Asset { disposal_date: Some(ymd(2022, 6, 30)), ..a }).unwrap();
+        assert_eq!((afa("2020"), afa("2021"), afa("2022")), (dec!(1200), dec!(1200), dec!(600)));
+
+        let mut b = asset(dec!(1200), 3, "linear", ymd(2022, 5, 1));
+        b.name = "Monitor".into();
+        b.account = "0420".into();
+        let b: Asset = db::get(&conn, save(&conn, b).unwrap()).unwrap();
+        assert!(save(&conn, Asset { acquisition_date: ymd(2021, 5, 1), ..b }).is_err(), "moving it into the locked period");
     }
 
     #[test]
