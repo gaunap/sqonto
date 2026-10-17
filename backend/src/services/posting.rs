@@ -168,19 +168,30 @@ struct Part {
     tax: Decimal,
 }
 
+/// UStVA code of the turnover of a sales document at the given rate.
+fn turnover_code(doc: &Document, rate: Decimal) -> &'static str {
+    match doc.tax_mode.as_str() {
+        "small_business" => "KU",
+        "reverse_charge" => "RC13B_OUT",
+        "eu_service" => "EURC",
+        "eu_delivery" => "IGL",
+        "export" => "EXP",
+        "third_country" => "NSTB",
+        _ => base_code_for_rate(rate),
+    }
+}
+
 fn doc_parts(ctx: &Ctx, conn: &Connection, doc: &Document) -> Result<(Vec<Part>, Decimal)> {
+    let (parts, totals, _) = doc_parts_of(ctx, conn, doc, false)?;
+    Ok((parts, totals.gross))
+}
+
+/// Revenue split of a sales document. With `items_only`, deduction lines (Abschläge in a
+/// Schlussrechnung) are left out and the parts cover the positions alone.
+fn doc_parts_of(ctx: &Ctx, conn: &Connection, doc: &Document, items_only: bool) -> Result<(Vec<Part>, calc::Totals, Vec<DocumentLine>)> {
     let mut lines = db::query::<DocumentLine>(conn, "WHERE document_id = ?1 ORDER BY position", &[v(doc.id)])?;
     let totals = calc::calculate(doc, &mut lines);
     let mode = doc.tax_mode.as_str();
-    let mode_code: Option<&'static str> = match mode {
-        "small_business" => Some("KU"),
-        "reverse_charge" => Some("RC13B_OUT"),
-        "eu_service" => Some("EURC"),
-        "eu_delivery" => Some("IGL"),
-        "export" => Some("EXP"),
-        "third_country" => Some("NSTB"),
-        _ => None,
-    };
     let default_account = |rate: Decimal| -> String {
         let r = match mode {
             "small_business" => "erl_ku",
@@ -215,7 +226,7 @@ fn doc_parts(ctx: &Ctx, conn: &Connection, doc: &Document) -> Result<(Vec<Part>,
     }
     // Net per (rate, account)
     let mut by_rate: HashMap<Decimal, Vec<(String, Decimal)>> = HashMap::new();
-    for l in lines.iter().filter(|l| l.line_type == "item" || l.line_type == "deduction") {
+    for l in lines.iter().filter(|l| l.line_type == "item" || (!items_only && l.line_type == "deduction")) {
         let rate = calc::effective_rate(doc, l).normalize();
         let acc = if !l.account.is_empty() && ctx.accounts.contains_key(&l.account) {
             l.account.clone()
@@ -232,7 +243,7 @@ fn doc_parts(ctx: &Ctx, conn: &Connection, doc: &Document) -> Result<(Vec<Part>,
         }
     }
     let mut parts = Vec::new();
-    for g in &totals.groups {
+    for g in if items_only { &totals.item_groups } else { &totals.groups } {
         let rate = g.rate.normalize();
         let accs = by_rate.remove(&rate).unwrap_or_else(|| vec![(default_account(rate), g.net)]);
         let weights: Vec<Decimal> = accs.iter().map(|(_, n)| *n).collect();
@@ -240,11 +251,42 @@ fn doc_parts(ctx: &Ctx, conn: &Connection, doc: &Document) -> Result<(Vec<Part>,
         let nets = distribute(g.net, &weights);
         let (tax_account, tax_code) = ctx.ust_account(rate);
         for (i, (acc, _)) in accs.into_iter().enumerate() {
-            let code = mode_code.unwrap_or_else(|| base_code_for_rate(rate));
-            parts.push(Part { account: acc, code, net: nets[i], tax_account: tax_account.clone(), tax_code, tax: taxes[i] });
+            parts.push(Part { account: acc, code: turnover_code(doc, rate), net: nets[i], tax_account: tax_account.clone(), tax_code, tax: taxes[i] });
         }
     }
-    Ok((parts, totals.gross))
+    Ok((parts, totals, lines))
+}
+
+/// Deducted Abschläge of a Schlussrechnung per VAT rate (negative), on the Anzahlungen account.
+fn deduction_parts(ctx: &Ctx, doc: &Document, lines: &[DocumentLine]) -> Vec<Part> {
+    let mut by_rate: std::collections::BTreeMap<Decimal, (Decimal, Decimal)> = Default::default();
+    for l in lines.iter().filter(|l| l.line_type == "deduction") {
+        let e = by_rate.entry(calc::effective_rate(doc, l).normalize()).or_default();
+        e.0 += l.net_amount;
+        e.1 += l.tax_amount;
+    }
+    by_rate
+        .into_iter()
+        .map(|(rate, (net, tax))| {
+            let (tax_account, tax_code) = ctx.ust_account(rate);
+            Part { account: ctx.role("anzahlungen"), code: turnover_code(doc, rate), net, tax_account, tax_code, tax }
+        })
+        .collect()
+}
+
+/// Abschlagsrechnungen and their cancellations. In Bilanzierung they are not booked as
+/// receivables but as erhaltene Anzahlungen when paid.
+fn is_partial(conn: &Connection, doc: &Document) -> Result<bool> {
+    if doc.kind == "partial" {
+        return Ok(true);
+    }
+    if doc.kind == "cancellation"
+        && let Some(id) = doc.cancels_id
+        && let Some(cancelled) = db::find::<Document>(conn, id)?
+    {
+        return Ok(cancelled.kind == "partial");
+    }
+    Ok(false)
 }
 
 /// Receipt split: (account, net, tax, rate)
@@ -373,13 +415,17 @@ fn build(conn: &Connection, ctx: &Ctx, src: Source) -> Result<Vec<EntryDraft>> {
     match src {
         Source::Document(id) => {
             let Some(doc) = db::find::<Document>(conn, id)? else { return Ok(out) };
-            if ctx.euer || !doc.is_invoice_like() || doc.status == "draft" {
+            // Abschlagsrechnungen are booked on payment (erhaltene Anzahlungen), see Source::Transaction.
+            if ctx.euer || !doc.is_invoice_like() || doc.status == "draft" || is_partial(conn, &doc)? {
                 return Ok(out);
             }
-            let (parts, gross) = doc_parts(ctx, conn, &doc)?;
+            // Positions count as revenue in full; deducted Abschläge clear the Anzahlungen and
+            // their USt, which was due when they were received.
+            let (parts, totals, doc_lines) = doc_parts_of(ctx, conn, &doc, true)?;
+            let deductions = deduction_parts(ctx, &doc, &doc_lines);
             let sign = doc.sign();
-            let mut lines = vec![pl(ctx.role("ford"), sign * gross)];
-            for p in &parts {
+            let mut lines = vec![pl(ctx.role("ford"), sign * totals.gross)];
+            for p in parts.iter().chain(&deductions) {
                 lines.push(plc(p.account.clone(), -sign * p.net, p.code));
                 if !p.tax.is_zero() {
                     lines.push(plt(p.tax_account.clone(), -sign * p.tax, p.tax_code, -sign * p.net));
@@ -447,6 +493,17 @@ fn build(conn: &Connection, ctx: &Ctx, src: Source) -> Result<Vec<EntryDraft>> {
                             // are negative and therefore reduce revenue).
                             let (parts, gross) = doc_parts(ctx, conn, &doc)?;
                             lines.extend(split_payment_doc(&parts, gross, a.amount));
+                        } else if is_partial(conn, &doc)? {
+                            // Abschlag received before the service: erhaltene Anzahlung, the USt is
+                            // due with the payment (Mindest-Istversteuerung, § 13 Abs. 1 Nr. 1a S. 4 UStG).
+                            let (parts, gross) = doc_parts(ctx, conn, &doc)?;
+                            let anzahlungen = ctx.role("anzahlungen");
+                            lines.extend(split_payment_doc(&parts, gross, a.amount).into_iter().map(|mut s| {
+                                if !s.code.starts_with("UST") {
+                                    s.account = anzahlungen.clone();
+                                }
+                                s
+                            }));
                         } else {
                             lines.push(pl(ctx.role("ford"), -a.amount));
                         }
@@ -529,8 +586,20 @@ fn build(conn: &Connection, ctx: &Ctx, src: Source) -> Result<Vec<EntryDraft>> {
             // The receivable is cleared; revenue and VAT are reduced (§ 17 UStG correction),
             // i.e. the inverse of a payment split.
             let (parts, gross) = doc_parts(ctx, conn, &doc)?;
-            let mut lines = vec![pl(ctx.role("ford"), -a.amount)];
-            for mut s in split_payment_doc(&parts, gross, a.amount) {
+            let split = split_payment_doc(&parts, gross, a.amount);
+            // An Abschlag is no receivable: the reduction moves from the Anzahlungen (which the
+            // Schlussrechnung clears in full) to skonto / loss. Its USt was never due.
+            let partial = is_partial(conn, &doc)?;
+            let mut lines = if partial {
+                let anzahlungen = ctx.role("anzahlungen");
+                split.iter().filter(|s| !s.code.starts_with("UST")).map(|s| PL { account: anzahlungen.clone(), ..s.clone() }).collect()
+            } else {
+                vec![pl(ctx.role("ford"), -a.amount)]
+            };
+            for mut s in split {
+                if partial && s.code.starts_with("UST") {
+                    continue;
+                }
                 if !s.code.starts_with("UST") {
                     let target = match (a.writeoff_reason.as_str(), s.code) {
                         ("skonto", "S19") => Some("skonto19"),
@@ -838,6 +907,97 @@ mod tests {
         let conn = setup();
         direct(&conn, "0420", dec!(1190), dec!(19));
         assert_eq!(ustva_q1(&conn), (dec!(1000), dec!(190), dec!(0)));
+    }
+
+    fn balances(conn: &Connection) -> HashMap<String, Decimal> {
+        let mut m: HashMap<String, Decimal> = HashMap::new();
+        for l in crate::services::reports::raw_lines(conn, None, None).unwrap() {
+            *m.entry(l.account).or_default() += l.debit - l.credit;
+        }
+        m
+    }
+
+    /// (Kz 81 base, output tax) of the whole current year.
+    fn ustva_year(conn: &Connection) -> (Decimal, Decimal) {
+        let r = crate::services::reports::ustva(conn, today().year(), "Y").unwrap();
+        let kz81 = r.sections.iter().flat_map(|s| &s.fields).find(|f| f.kz == "81").and_then(|f| f.base).unwrap_or_default();
+        (kz81, r.output_tax)
+    }
+
+    #[test]
+    fn partial_invoices_are_anzahlungen_in_bilanz() {
+        use crate::services::documents::{self as docs, DocumentInput, PartialRequest};
+        use crate::services::finance::{self, PaymentRequest};
+        let conn = db::open_memory();
+        cfg::ensure_seeded(&conn).unwrap();
+        let mut s = cfg::load(&conn).unwrap();
+        s.tax.bookkeeping = "bilanz".into();
+        cfg::save(&conn, &s).unwrap();
+        let bank = finance::save_account(&conn, PaymentAccount { name: "Bank".into(), opening_date: ymd(today().year(), 1, 1), ..Default::default() }).unwrap();
+        let get = |m: &HashMap<String, Decimal>, a: &str| m.get(a).copied().unwrap_or_default();
+        let pay = |id: i64, amount: Decimal| finance::pay_document(&conn, id, PaymentRequest { account_id: Some(bank), amount, ..Default::default() }).unwrap();
+
+        let order = Document { doc_type: "order".into(), address: "Kunde GmbH\nWeg 1\n12345 Stadt".into(), tax_mode: "standard".into(), ..Default::default() };
+        let line = DocumentLine { line_type: "item".into(), name: "Leistung".into(), quantity: dec!(1), unit_price: dec!(1000), tax_rate: dec!(19), ..Default::default() };
+        let order = docs::create(&conn, DocumentInput { doc: order, lines: vec![line] }).unwrap();
+        docs::finalize(&conn, order).unwrap();
+
+        // Abschlagsrechnung issued: no receivable, no revenue, no USt yet.
+        let partial = docs::create_partial(&conn, order, PartialRequest { mode: "percent".into(), value: dec!(30) }).unwrap();
+        assert_eq!(docs::finalize(&conn, partial).unwrap().gross_total, dec!(357));
+        assert!(balances(&conn).values().all(|v| v.is_zero()), "{:?}", balances(&conn));
+
+        // Paid: erhaltene Anzahlung, USt due now.
+        pay(partial, dec!(357));
+        let b = balances(&conn);
+        assert_eq!((get(&b, "1200"), get(&b, "1710"), get(&b, "1776"), get(&b, "8400")), (dec!(357), dec!(-300), dec!(-57), dec!(0)));
+        assert_eq!(ustva_year(&conn), (dec!(300), dec!(57)));
+
+        // Schlussrechnung: full revenue, Anzahlungen cleared, only the remaining USt is added.
+        let fin = docs::create_final(&conn, order).unwrap();
+        assert_eq!(docs::finalize(&conn, fin).unwrap().gross_total, dec!(833));
+        let b = balances(&conn);
+        assert_eq!((get(&b, "1400"), get(&b, "1710"), get(&b, "1776"), get(&b, "8400")), (dec!(833), dec!(0), dec!(-190), dec!(-1000)));
+        assert_eq!(ustva_year(&conn), (dec!(1000), dec!(190)));
+        pay(fin, dec!(833));
+        let before = balances(&conn);
+        assert_eq!(get(&before, "1400"), dec!(0));
+
+        // A cancelled (unpaid) Abschlag books nothing either.
+        let order2 = docs::copy(&conn, order).unwrap();
+        docs::finalize(&conn, order2).unwrap();
+        let p2 = docs::create_partial(&conn, order2, PartialRequest { mode: "amount".into(), value: dec!(100) }).unwrap();
+        docs::finalize(&conn, p2).unwrap();
+        docs::cancel(&conn, p2).unwrap();
+        assert_eq!(balances(&conn), before);
+    }
+
+    #[test]
+    fn skonto_on_partial_invoice_in_bilanz() {
+        use crate::services::documents::{self as docs, DocumentInput, PartialRequest};
+        use crate::services::finance::{self, PaymentRequest};
+        let conn = db::open_memory();
+        cfg::ensure_seeded(&conn).unwrap();
+        let mut s = cfg::load(&conn).unwrap();
+        s.tax.bookkeeping = "bilanz".into();
+        cfg::save(&conn, &s).unwrap();
+        let bank = finance::save_account(&conn, PaymentAccount { name: "Bank".into(), opening_date: ymd(today().year(), 1, 1), ..Default::default() }).unwrap();
+        let get = |a: &str| balances(&conn).get(a).copied().unwrap_or_default();
+        let order = Document { doc_type: "order".into(), address: "Kunde GmbH".into(), tax_mode: "standard".into(), ..Default::default() };
+        let line = DocumentLine { line_type: "item".into(), name: "Leistung".into(), quantity: dec!(1), unit_price: dec!(1000), tax_rate: dec!(19), ..Default::default() };
+        let order = docs::create(&conn, DocumentInput { doc: order, lines: vec![line] }).unwrap();
+        docs::finalize(&conn, order).unwrap();
+        let partial = docs::create_partial(&conn, order, PartialRequest { mode: "percent".into(), value: dec!(30) }).unwrap();
+        docs::finalize(&conn, partial).unwrap();
+
+        // 2 % Skonto on 357 €: 349.86 € received, 7.14 € written off.
+        finance::pay_document(&conn, partial, PaymentRequest { account_id: Some(bank), amount: dec!(349.86), writeoff: "skonto".into(), ..Default::default() }).unwrap();
+        assert_eq!((get("1710"), get("1776"), get("8736")), (dec!(-300), dec!(-55.86), dec!(6)), "Anzahlungen fully cleared by payment + Skonto");
+
+        let fin = docs::create_final(&conn, order).unwrap();
+        docs::finalize(&conn, fin).unwrap();
+        assert_eq!((get("1710"), get("1776"), get("8400"), get("1400")), (dec!(0), dec!(-188.86), dec!(-1000), dec!(833)));
+        assert_eq!(ustva_year(&conn), (dec!(994), dec!(188.86)), "turnover and USt reduced by the Skonto");
     }
 
     #[test]
