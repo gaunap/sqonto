@@ -295,6 +295,48 @@ mod tests {
     }
 
     #[test]
+    fn locked_period_refuses_every_change() {
+        use crate::models::{Asset, Document, DocumentLine, PaymentAccount, Receipt, ReceiptLine, Transaction};
+        use crate::services::{assets, documents, finance, receipts};
+        use rust_decimal_macros::dec;
+        let conn = db::open_memory();
+        ensure_seeded(&conn).unwrap();
+        seed_test_company(&conn);
+        let bank = finance::save_account(&conn, PaymentAccount { name: "Bank".into(), opening_date: ymd(2020, 1, 1), ..Default::default() }).unwrap();
+        let receipt = |date: NaiveDate| receipts::ReceiptInput {
+            receipt: Receipt { supplier_name: "Lieferant".into(), receipt_type: "expense".into(), date, prices_gross: true, ..Default::default() },
+            lines: vec![ReceiptLine { account: "4930".into(), gross: dec!(119), tax_rate: dec!(19), ..Default::default() }],
+            payment: None,
+        };
+        let tx = |date: NaiveDate| finance::TransactionInput { tx: Transaction { account_id: bank, date, amount: dec!(-10), purpose: "Gebühr".into(), ..Default::default() }, allocations: vec![] };
+        let doc = Document { doc_type: "invoice".into(), address: "Kunde GmbH\nWeg 1\n12345 Stadt".into(), tax_mode: "standard".into(), date: ymd(2020, 3, 1), ..Default::default() };
+        let line = DocumentLine { line_type: "item".into(), name: "Leistung".into(), quantity: dec!(1), unit_price: dec!(500), tax_rate: dec!(19), ..Default::default() };
+        let draft = documents::create(&conn, documents::DocumentInput { doc, lines: vec![line] }).unwrap();
+        let r = receipts::create(&conn, receipt(ymd(2020, 3, 1))).unwrap();
+        let t = finance::create(&conn, tx(ymd(2020, 3, 1))).unwrap();
+
+        lock_until(&conn, ymd(2020, 12, 31)).unwrap();
+        let locked = |res: anyhow::Result<()>, what: &str| {
+            let err = res.expect_err(what).to_string();
+            assert!(err.contains("festgeschrieben"), "{what}: {err}");
+        };
+        locked(documents::finalize(&conn, draft).map(|_| ()), "finalize an invoice dated in the period");
+        locked(receipts::create(&conn, receipt(ymd(2020, 6, 1))).map(|_| ()), "new receipt");
+        let full = receipts::get_full(&conn, r).unwrap();
+        locked(receipts::update(&conn, r, receipts::ReceiptInput { receipt: full.receipt, lines: full.lines, payment: None }), "change receipt");
+        locked(receipts::delete(&conn, r), "delete receipt");
+        locked(finance::create(&conn, tx(ymd(2020, 5, 1))).map(|_| ()), "new bank movement");
+        let old = db::get::<Transaction>(&conn, t).unwrap();
+        locked(finance::update(&conn, t, finance::TransactionInput { tx: old, allocations: vec![] }), "change bank movement");
+        locked(finance::delete(&conn, t), "delete bank movement");
+        let asset = Asset { name: "Laptop".into(), account: "0420".into(), acquisition_date: ymd(2020, 4, 1), cost: dec!(1200), useful_life_years: 3, method: "linear".into(), ..Default::default() };
+        locked(assets::save(&conn, asset).map(|_| ()), "new asset");
+        // The next period is open.
+        assert!(receipts::create(&conn, receipt(ymd(2021, 1, 4))).is_ok());
+        assert!(finance::create(&conn, tx(ymd(2021, 1, 4))).is_ok());
+    }
+
+    #[test]
     fn lock_only_moves_forward() {
         let conn = db::open_memory();
         ensure_seeded(&conn).unwrap();

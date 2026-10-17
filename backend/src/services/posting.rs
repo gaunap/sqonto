@@ -924,6 +924,46 @@ mod tests {
         (kz81, r.output_tax)
     }
 
+    fn invoice(conn: &Connection, doc_type: &str, net: Decimal) -> i64 {
+        use crate::services::documents::{self as docs, DocumentInput};
+        let doc = Document { doc_type: doc_type.into(), address: "Kunde GmbH\nWeg 1\n12345 Stadt".into(), tax_mode: "standard".into(), date: today(), ..Default::default() };
+        let line = DocumentLine { line_type: "item".into(), name: "Leistung".into(), quantity: dec!(1), unit_price: net, tax_rate: dec!(19), ..Default::default() };
+        let id = docs::create(conn, DocumentInput { doc, lines: vec![line] }).unwrap();
+        docs::finalize(conn, id).unwrap();
+        id
+    }
+
+    #[test]
+    fn credit_note_refund_reduces_revenue_in_euer() {
+        use crate::services::finance::{self, PaymentRequest};
+        let conn = db::open_memory();
+        cfg::ensure_seeded(&conn).unwrap();
+        cfg::seed_test_company(&conn);
+        let bank = finance::save_account(&conn, PaymentAccount { name: "Bank".into(), opening_date: ymd(today().year(), 1, 1), ..Default::default() }).unwrap();
+        let pay = |id: i64, amount: Decimal| finance::pay_document(&conn, id, PaymentRequest { account_id: Some(bank), amount, ..Default::default() }).unwrap();
+        pay(invoice(&conn, "invoice", dec!(1000)), dec!(1190));
+        pay(invoice(&conn, "credit_note", dec!(400)), dec!(476));
+        let b = balances(&conn);
+        let get = |a: &str| b.get(a).copied().unwrap_or_default();
+        assert_eq!((get("1200"), get("8400"), get("1776")), (dec!(714), dec!(-600), dec!(-114)), "bank, revenue and USt after the refund");
+        assert_eq!(ustva_year(&conn), (dec!(600), dec!(114)));
+    }
+
+    #[test]
+    fn cancellation_nets_to_zero_in_bilanz() {
+        let conn = db::open_memory();
+        cfg::ensure_seeded(&conn).unwrap();
+        cfg::seed_test_company(&conn);
+        let mut s = cfg::load(&conn).unwrap();
+        s.tax.bookkeeping = "bilanz".into();
+        cfg::save(&conn, &s).unwrap();
+        let id = invoice(&conn, "invoice", dec!(1000));
+        assert_eq!(balances(&conn).get("1400").copied(), Some(dec!(1190)));
+        crate::services::documents::cancel(&conn, id).unwrap();
+        assert!(balances(&conn).values().all(|v| v.is_zero()), "{:?}", balances(&conn));
+        assert_eq!(ustva_year(&conn), (dec!(0), dec!(0)));
+    }
+
     #[test]
     fn partial_invoices_are_anzahlungen_in_bilanz() {
         use crate::services::documents::{self as docs, DocumentInput, PartialRequest};
