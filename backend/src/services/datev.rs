@@ -84,7 +84,16 @@ pub fn export(conn: &Connection, from: NaiveDate, to: NaiveDate, advisor: &str, 
         if items.len() < 2 {
             continue;
         }
-        let main = items.iter().enumerate().max_by(|a, b| a.1 .1.abs().cmp(&b.1 .1.abs())).map(|(i, _)| i).unwrap_or(0);
+        // The BU key belongs to the Gegenkonto, so the main account (Konto) is the largest line
+        // without a key; on equal amounts a balance account (bank, receivables, …) is preferred.
+        let is_balance = |acc: &str| accounts.get(acc).is_some_and(|a| a.kind != "revenue" && a.kind != "expense");
+        let main = items
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, _, bu, _))| bu.is_empty())
+            .max_by_key(|(_, (acc, amt, _, _))| (amt.abs(), is_balance(acc)))
+            .map(|(i, _)| i)
+            .unwrap_or(0);
         let main_acc = items[main].0.clone();
         for (i, (acc, amt, bu, _)) in items.iter().enumerate() {
             if i == main || amt.is_zero() {
@@ -136,4 +145,96 @@ fn cp1252_safe(s: &str) -> String {
         });
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::util::ymd;
+    use rust_decimal_macros::dec;
+
+    /// Inserts a journal entry; lines are (account, signed amount (+ = Soll), tax code, base).
+    fn entry(conn: &Connection, lines: &[(&str, Decimal, &str, Decimal)]) {
+        let mut e = JournalEntry { date: ymd(2026, 3, 10), description: "Test".into(), doc_ref: "B-1".into(), source_type: "test".into(), ..Default::default() };
+        let id = db::insert(conn, &mut e).unwrap();
+        for (account, amount, code, base) in lines {
+            let mut l = JournalLine {
+                entry_id: id,
+                account: account.to_string(),
+                debit: if *amount > Decimal::ZERO { *amount } else { Decimal::ZERO },
+                credit: if *amount < Decimal::ZERO { -*amount } else { Decimal::ZERO },
+                tax_code: code.to_string(),
+                base: *base,
+                ..Default::default()
+            };
+            db::insert(conn, &mut l).unwrap();
+        }
+    }
+
+    /// Booking rows as (Umsatz, S/H, Konto, Gegenkonto, BU).
+    fn rows(conn: &Connection) -> Vec<(String, String, String, String, String)> {
+        let bytes = export(conn, ymd(2026, 1, 1), ymd(2026, 12, 31), "", "").unwrap();
+        let text = encoding_rs::WINDOWS_1252.decode(&bytes).0.into_owned();
+        text.lines()
+            .skip(2)
+            .map(|l| {
+                let c: Vec<String> = l.split(';').map(|s| s.trim_matches('"').to_string()).collect();
+                (c[0].clone(), c[1].clone(), c[6].clone(), c[7].clone(), c[8].clone())
+            })
+            .collect()
+    }
+
+    fn setup() -> Connection {
+        let conn = db::open_memory();
+        cfg::ensure_seeded(&conn).unwrap();
+        conn
+    }
+
+    fn r(amount: &str, sh: &str, konto: &str, gegen: &str, bu: &str) -> (String, String, String, String, String) {
+        (amount.into(), sh.into(), konto.into(), gegen.into(), bu.into())
+    }
+
+    #[test]
+    fn expense_payment_keeps_vorsteuer_key() {
+        // EÜR payment of a receipt: money line first, then expense and input tax (SKR03).
+        let conn = setup();
+        entry(&conn, &[("1200", dec!(-119), "", dec!(0)), ("4930", dec!(100), "", dec!(0)), ("1576", dec!(19), "VST", dec!(100))]);
+        assert_eq!(rows(&conn), vec![r("119,00", "H", "1200", "4930", "9")]);
+    }
+
+    #[test]
+    fn manual_booking_keeps_vorsteuer_key() {
+        // Manual booking: expense line first, money line last.
+        let conn = setup();
+        entry(&conn, &[("4930", dec!(10), "", dec!(0)), ("1571", dec!(0.70), "VST", dec!(10)), ("1200", dec!(-10.70), "", dec!(0))]);
+        assert_eq!(rows(&conn), vec![r("10,70", "H", "1200", "4930", "8")]);
+    }
+
+    #[test]
+    fn revenue_keys_depend_on_automatic_accounts() {
+        let conn = setup();
+        // 8400 is an Automatikkonto: gross amount without BU key.
+        entry(&conn, &[("1200", dec!(119), "", dec!(0)), ("8400", dec!(-100), "S19", dec!(0)), ("1776", dec!(-19), "UST19", dec!(-100))]);
+        // A custom revenue account needs BU 3 (19 %) / 2 (7 %).
+        let mut a = crate::models::Account { number: "8401".into(), name: "Erlöse Beratung".into(), kind: "revenue".into(), ..Default::default() };
+        db::insert(&conn, &mut a).unwrap();
+        entry(&conn, &[("1200", dec!(107), "", dec!(0)), ("8401", dec!(-100), "S7", dec!(0)), ("1771", dec!(-7), "UST7", dec!(-100))]);
+        assert_eq!(rows(&conn), vec![r("119,00", "S", "1200", "8400", ""), r("107,00", "S", "1200", "8401", "2")]);
+    }
+
+    #[test]
+    fn split_receipt_keeps_both_keys() {
+        let conn = setup();
+        entry(
+            &conn,
+            &[
+                ("1200", dec!(-226), "", dec!(0)),
+                ("4930", dec!(100), "", dec!(0)),
+                ("1576", dec!(19), "VST", dec!(100)),
+                ("4940", dec!(100), "", dec!(0)),
+                ("1571", dec!(7), "VST", dec!(100)),
+            ],
+        );
+        assert_eq!(rows(&conn), vec![r("119,00", "H", "1200", "4930", "9"), r("107,00", "H", "1200", "4940", "8")]);
+    }
 }
