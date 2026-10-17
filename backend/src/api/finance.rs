@@ -111,12 +111,24 @@ pub async fn import_einvoice(State(st): State<AppState>, mut mp: Multipart) -> A
         (None, "manual")
     };
     let mime = if is_pdf { "application/pdf".to_string() } else if is_xml { "application/xml".to_string() } else { mime };
+    // Parse before storing, so a rejected file leaves nothing behind. A PDF with unreadable
+    // e-invoice data is still kept as an ordinary receipt.
+    let mut warnings = Vec::new();
+    let parsed = match xml.map(|x| einvoice::parse_xml(&x)) {
+        Some(Ok(parsed)) => Some(parsed),
+        Some(Err(e)) if is_pdf => {
+            warnings.push(format!("Die eingebetteten E-Rechnungsdaten konnten nicht gelesen werden ({e}). Bitte den Beleg manuell erfassen."));
+            None
+        }
+        Some(Err(e)) => return Err(AppError::from(e)),
+        None => None,
+    };
     let meta = save_file(&st, &name, &mime, &bytes)?;
-    match xml {
-        Some(xml) => {
-            let parsed = einvoice::parse_xml(&xml).map_err(AppError::from)?;
-            let (mut draft, contact_match, warnings) = st.read(|c| einvoice::to_receipt(c, &parsed, source))?;
+    match parsed {
+        Some(parsed) => {
+            let (mut draft, contact_match, more) = st.read(|c| einvoice::to_receipt(c, &parsed, source))?;
             draft.receipt.file_id = Some(meta.id);
+            warnings.extend(more);
             Ok(Json(ImportResult { parsed, draft, contact_match, warnings, file_id: Some(meta.id), file: Some(meta) }))
         }
         None => {
@@ -125,7 +137,7 @@ pub async fn import_einvoice(State(st): State<AppState>, mut mp: Multipart) -> A
                 lines: vec![],
                 payment: None,
             };
-            Ok(Json(ImportResult { parsed: Default::default(), draft, contact_match: None, warnings: vec![], file_id: Some(meta.id), file: Some(meta) }))
+            Ok(Json(ImportResult { parsed: Default::default(), draft, contact_match: None, warnings, file_id: Some(meta.id), file: Some(meta) }))
         }
     }
 }
