@@ -56,6 +56,7 @@ import {
   IconBuildingWarehouse,
   IconScale,
   IconClipboardCheck,
+  IconWorld,
 } from '@tabler/icons-react';
 import { useApi, useStatus } from '@/api/hooks';
 import { SqontoLogo } from '@/components/ui';
@@ -117,6 +118,7 @@ function useNavSections(counts: { overdue: number; transactions: number; drafts:
       title: 'Steuern & Berichte',
       items: [
         { label: 'Umsatzsteuer', to: '/steuern/ustva', icon: IconCalculator },
+        { label: 'Zusammenfassende Meldung', to: '/steuern/zm', icon: IconWorld },
         { label: 'EÜR · GuV · Bilanz', to: '/berichte', icon: IconScale },
         { label: 'Auswertungen', to: '/auswertungen', icon: IconChartBar },
         { label: 'Exporte & DATEV', to: '/exporte', icon: IconFileDownload },
@@ -179,6 +181,7 @@ function SearchSpotlight() {
       { id: 'nav-receipts', label: 'Belege', group: 'Navigation', leftSection: <IconReceipt2 size={18} />, onClick: () => navigate('/belege') },
       { id: 'nav-bank', label: 'Bank & Zahlungen', group: 'Navigation', leftSection: <IconBuildingBank size={18} />, onClick: () => navigate('/bank') },
       { id: 'nav-ustva', label: 'Umsatzsteuer-Voranmeldung', group: 'Navigation', leftSection: <IconCalculator size={18} />, onClick: () => navigate('/steuern/ustva') },
+      { id: 'nav-zm', label: 'Zusammenfassende Meldung', group: 'Navigation', leftSection: <IconWorld size={18} />, onClick: () => navigate('/steuern/zm') },
       { id: 'nav-euer', label: 'EÜR · GuV · Bilanz', group: 'Navigation', leftSection: <IconScale size={18} />, onClick: () => navigate('/berichte') },
       { id: 'nav-analytics', label: 'Auswertungen', group: 'Navigation', leftSection: <IconChartPie size={18} />, onClick: () => navigate('/auswertungen') },
       { id: 'nav-settings', label: 'Einstellungen', group: 'Navigation', leftSection: <IconSettings size={18} />, onClick: () => navigate('/einstellungen') },

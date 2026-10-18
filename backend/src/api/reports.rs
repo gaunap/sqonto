@@ -18,6 +18,7 @@ use crate::error::{ApiResult, AppError};
 use crate::models::{FileMeta, Receipt, UstvaFiling};
 use crate::pdf::data::{self, ReportSection, col, trow};
 use crate::services::reports::{self, Analytics, Bwa, Dashboard, OpenItems, Statement, SusaRow, UstvaPeriod, UstvaReport};
+use crate::services::zm::{self, ZmPeriod, ZmReport};
 use crate::services::{assets, datev, settings as cfg};
 use crate::state::AppState;
 use crate::util::{fmt_date, fmt_money, fmt_num, today, ymd};
@@ -108,6 +109,31 @@ pub async fn unfile_ustva(State(st): State<AppState>, Path((y, period)): Path<(i
         reports::ustva(c, y, &period)
     })
     .map(Json)
+}
+
+pub async fn zm_periods(State(st): State<AppState>, Query(q): Query<YearQ>) -> ApiResult<Vec<ZmPeriod>> {
+    st.read(|c| zm::periods(c, year(&q))).map(Json)
+}
+
+pub async fn zm_report(State(st): State<AppState>, Path((y, period)): Path<(i32, String)>) -> ApiResult<ZmReport> {
+    st.read(|c| zm::report(c, y, &period)).map(Json)
+}
+
+pub async fn file_zm(State(st): State<AppState>, Path((y, period)): Path<(i32, String)>, Json(r): Json<FilingRequest>) -> ApiResult<ZmReport> {
+    st.write(|c| zm::file(c, y, &period, r.submitted_at.unwrap_or_else(today), r.note)).map(Json)
+}
+
+pub async fn unfile_zm(State(st): State<AppState>, Path((y, period)): Path<(i32, String)>) -> ApiResult<ZmReport> {
+    st.write(|c| zm::unfile(c, y, &period)).map(Json)
+}
+
+/// CSV file for the import in the ELSTER form.
+pub async fn zm_csv(State(st): State<AppState>, Path((y, period)): Path<(i32, String)>) -> Result<Response, AppError> {
+    let r = st.read(|c| zm::report(c, y, &period))?;
+    if r.rows.is_empty() {
+        return Err(AppError::bad("Für diesen Zeitraum gibt es nichts zu melden."));
+    }
+    Ok(file_response(zm::csv(&r.rows).into_bytes(), "text/csv; charset=utf-8", &format!("ZM_{y}_{period}.csv"), true))
 }
 
 fn statement_sections(s: &Statement, with_prev: bool, prev_label: &str) -> Vec<ReportSection> {
@@ -298,6 +324,34 @@ pub async fn report_pdf(State(st): State<AppState>, Path(kind): Path<String>, Qu
                     vec!["Dieser Ausdruck dient der Kontrolle. Die Übermittlung erfolgt über ELSTER.".into()],
                 )?;
                 name = format!("UStVA_{y}_{period}.pdf");
+            }
+            "zm" => {
+                let period = q.period.clone().unwrap_or_else(|| "Q1".into());
+                let r = zm::report(c, y, &period)?;
+                let kind = |k: &str| if k == "L" { "Lieferung (L)" } else { "Sonstige Leistung (S)" };
+                let rows: Vec<_> = r.rows.iter().map(|x| trow(vec![x.vat_id.clone(), x.contact_name.clone(), kind(&x.kind).into(), fmt_num(Decimal::from(x.reported), 0)], "normal")).collect();
+                let mut sections = vec![ReportSection {
+                    title: String::new(),
+                    columns: vec![col("USt-IdNr.", "left", "34mm"), col("Kunde", "left", "1fr"), col("Art der Leistung", "left", "40mm"), col("Summe (volle €)", "right", "30mm")],
+                    rows,
+                }];
+                if !r.issues.is_empty() {
+                    sections.push(ReportSection {
+                        title: "Nicht gemeldet – bitte prüfen".into(),
+                        columns: vec![col("Beleg", "left", "26mm"), col("Kunde", "left", "1fr"), col("Hinweis", "left", "1fr"), col("Netto", "right", "26mm")],
+                        rows: r.issues.iter().map(|i| trow(vec![i.document.number.clone(), i.document.contact_name.clone(), i.message.clone(), fmt_money(i.document.amount)], "normal")).collect(),
+                    });
+                }
+                job = data::report_job(
+                    c,
+                    "Zusammenfassende Meldung",
+                    &format!("{} · fällig am {}", r.period_label, fmt_date(r.due_date)),
+                    false,
+                    sections,
+                    vec![("Innergemeinschaftliche Lieferungen".into(), format!("{} €", fmt_num(Decimal::from(r.total_deliveries), 0))), ("Sonstige Leistungen".into(), format!("{} €", fmt_num(Decimal::from(r.total_services), 0)))],
+                    vec!["Dieser Ausdruck dient der Kontrolle. Die Übermittlung erfolgt über ELSTER.".into()],
+                )?;
+                name = format!("ZM_{y}_{period}.pdf");
             }
             "open-items" => {
                 let oi = reports::open_items(c)?;

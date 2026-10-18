@@ -24,3 +24,4 @@ pub mod recurring;
 pub mod reports;
 pub mod settings;
 pub mod update;
+pub mod zm;

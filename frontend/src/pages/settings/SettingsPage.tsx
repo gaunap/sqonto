@@ -318,6 +318,16 @@ function TaxTab({ s, patch }: { s: Settings; patch: Patch }) {
               onChange={(v) => set({ ustva_period: v ?? 'quarterly' })}
             />
             <Switch mt="lg" label="Dauerfristverlängerung" description="Fälligkeit verschiebt sich um einen Monat" checked={t.permanent_extension} onChange={(e) => set({ permanent_extension: e.currentTarget.checked })} />
+            <Select
+              label="Zusammenfassende Meldung"
+              description="Monatlich, sobald die innergemeinschaftlichen Lieferungen 50.000 € im Quartal übersteigen"
+              data={[
+                { value: 'monthly', label: 'Monatlich' },
+                { value: 'quarterly', label: 'Vierteljährlich' },
+              ]}
+              value={t.zm_period}
+              onChange={(v) => set({ zm_period: v ?? 'quarterly' })}
+            />
           </SimpleGrid>
           <Text size="xs" c="dimmed">
             Versteuerung: {t.bookkeeping === 'bilanz' ? 'Soll-Versteuerung (nach vereinbarten Entgelten)' : 'Ist-Versteuerung (nach vereinnahmten Entgelten)'}

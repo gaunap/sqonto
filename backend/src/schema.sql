@@ -396,3 +396,14 @@ CREATE TABLE IF NOT EXISTS ustva_filings (
   note         TEXT NOT NULL DEFAULT '',
   UNIQUE(year, period)
 );
+
+CREATE TABLE IF NOT EXISTS zm_filings (
+  id           INTEGER PRIMARY KEY,
+  year         INTEGER NOT NULL,
+  period       TEXT NOT NULL,
+  submitted_at TEXT NOT NULL DEFAULT '',
+  amount       TEXT NOT NULL DEFAULT '0',
+  content      TEXT NOT NULL DEFAULT '',
+  note         TEXT NOT NULL DEFAULT '',
+  UNIQUE(year, period)
+);

@@ -790,7 +790,7 @@ pub fn period_range(year: i32, period: &str) -> (NaiveDate, NaiveDate, String) {
 }
 
 /// Deadlines falling on a weekend or public holiday move to the next working day (§ 108 Abs. 3 AO).
-fn next_workday(d: NaiveDate) -> NaiveDate {
+pub fn next_workday(d: NaiveDate) -> NaiveDate {
     let mut d = d;
     while d.weekday() == Weekday::Sat || d.weekday() == Weekday::Sun || crate::util::is_national_holiday(d) {
         d += Duration::days(1);
@@ -1367,6 +1367,13 @@ pub fn dashboard(conn: &Connection) -> Result<Dashboard> {
     let unfiled = unfiled_ustva(conn, t)?;
     if unfiled > 0 {
         todos.push(Todo { kind: "ustva".into(), label: plural(unfiled, "offene Umsatzsteuer-Voranmeldung", "offene Umsatzsteuer-Voranmeldungen"), count: unfiled, link: "/steuern/ustva".into(), severity: "violet".into() });
+    }
+    let (zm_unfiled, zm_changed) = crate::services::zm::todos(conn, t)?;
+    if zm_changed > 0 {
+        todos.push(Todo { kind: "zm_changed".into(), label: plural(zm_changed, "Zusammenfassende Meldung nach Übermittlung geändert", "Zusammenfassende Meldungen nach Übermittlung geändert"), count: zm_changed, link: "/steuern/zm".into(), severity: "red".into() });
+    }
+    if zm_unfiled > 0 {
+        todos.push(Todo { kind: "zm".into(), label: plural(zm_unfiled, "offene Zusammenfassende Meldung", "offene Zusammenfassende Meldungen"), count: zm_unfiled, link: "/steuern/zm".into(), severity: "violet".into() });
     }
     let recent = db::query::<Activity>(conn, "ORDER BY id DESC LIMIT 8", &[])?;
     let mut open_receipts = oi.payables.clone();

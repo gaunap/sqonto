@@ -62,6 +62,7 @@ export const router = createBrowserRouter([
           { path: 'buchhaltung/konten/:number', lazy: page(() => import('./pages/accounting/LedgerPage'), (m) => <m.LedgerPage />) },
           { path: 'buchhaltung/anlagen', lazy: page(() => import('./pages/accounting/AssetsPage'), (m) => <m.AssetsPage />) },
           { path: 'steuern/ustva', lazy: page(() => import('./pages/tax/UstvaPage'), (m) => <m.UstvaPage />) },
+          { path: 'steuern/zm', lazy: page(() => import('./pages/tax/ZmPage'), (m) => <m.ZmPage />) },
           { path: 'berichte', lazy: page(() => import('./pages/reports/StatementsPage'), (m) => <m.StatementsPage />) },
           { path: 'auswertungen', lazy: page(() => import('./pages/reports/AnalyticsPage'), (m) => <m.AnalyticsPage />) },
           { path: 'exporte', lazy: page(() => import('./pages/reports/ExportsPage'), (m) => <m.ExportsPage />) },

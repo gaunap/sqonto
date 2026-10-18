@@ -414,6 +414,13 @@ pub fn load(conn: &Connection) -> Result<()> {
         let mut f = UstvaFiling { id: 0, year: year as i64, period, submitted_at: (due - Duration::days(3)).to_string(), amount: rep.zahllast, note: "Über ELSTER übermittelt".into() };
         db::insert(conn, &mut f)?;
     }
+    for q in 1..=quarters_done {
+        let period = format!("Q{q}");
+        let rep = crate::services::zm::report(conn, year, &period)?;
+        if !small_business && !rep.rows.is_empty() && rep.due_date <= today() {
+            crate::services::zm::file(conn, year, &period, rep.due_date - Duration::days(5), "Über ELSTER übermittelt".into())?;
+        }
+    }
     for month in [1u32, 4, 7, 10] {
         let d = ymd(year, month, 28);
         if d > today() {

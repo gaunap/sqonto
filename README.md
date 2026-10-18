@@ -24,7 +24,7 @@ Projektwebsite: [sqonto.de](https://sqonto.de).
   (Bilanzierung, Soll-Versteuerung), SKR03/SKR04, Buchungsjournal, Kontenblätter, manuelle
   Buchungen, Anlagenverzeichnis mit AfA (linear, GWG, Sammelposten), Festschreibung.
 - **Steuern & Berichte:** Umsatzsteuer-Voranmeldung (inkl. Dauerfristverlängerung und
-  Kleinunternehmerregelung), EÜR, GuV, Bilanz, BWA, Summen- und Saldenliste, Auswertungen,
+  Kleinunternehmerregelung), Zusammenfassende Meldung (CSV-Import für ELSTER), EÜR, GuV, Bilanz, BWA, Summen- und Saldenliste, Auswertungen,
   Dashboard, DATEV-Export (EXTF-Buchungsstapel), Beleg-ZIP, alle Berichte als PDF.
 
 ## Schnellstart (Windows)

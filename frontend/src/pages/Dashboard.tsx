@@ -33,6 +33,7 @@ import {
   IconBellRinging,
   IconBuildingBank,
   IconCalculator,
+  IconWorld,
   IconCash,
   IconChartLine,
   IconCheck,
@@ -60,6 +61,8 @@ const TODO_ICONS: Record<string, React.ReactNode> = {
   transactions: <IconBuildingBank size={18} />,
   drafts: <IconPencil size={18} />,
   ustva: <IconCalculator size={18} />,
+  zm: <IconWorld size={18} />,
+  zm_changed: <IconWorld size={18} />,
 };
 
 function trend(current: number, previous: number) {

@@ -741,6 +741,20 @@ entity! {
     }
 }
 
+entity! {
+    /// A Zusammenfassende Meldung marked as submitted; `content` holds the reported CSV rows.
+    pub struct ZmFiling in "zm_filings" {
+        pub id: i64,
+        pub year: i64,
+        pub period: String,
+        pub submitted_at: String,
+        #[ts(type = "number")]
+        pub amount: Decimal,
+        pub content: String,
+        pub note: String,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Einstellungen
 // ---------------------------------------------------------------------------
@@ -809,6 +823,8 @@ pub struct TaxSettings {
     /// monthly | quarterly | yearly
     pub ustva_period: String,
     pub permanent_extension: bool,
+    /// Zusammenfassende Meldung: monthly | quarterly
+    pub zm_period: String,
     pub locked_until: Option<NaiveDate>,
     #[ts(type = "number")]
     pub default_tax_rate: Decimal,
@@ -822,6 +838,7 @@ impl Default for TaxSettings {
             chart: "SKR03".into(),
             ustva_period: "quarterly".into(),
             permanent_extension: false,
+            zm_period: "quarterly".into(),
             locked_until: None,
             default_tax_rate: Decimal::from(19),
         }

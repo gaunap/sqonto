@@ -20,4 +20,8 @@ chart: string,
 /**
  * monthly | quarterly | yearly
  */
-ustva_period: string, permanent_extension: boolean, locked_until: string | null, default_tax_rate: number, };
+ustva_period: string, permanent_extension: boolean, 
+/**
+ * Zusammenfassende Meldung: monthly | quarterly
+ */
+zm_period: string, locked_until: string | null, default_tax_rate: number, };
