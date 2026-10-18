@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Beschreibungsstandard für die Datenträgerüberlassung (GDPdU/GoBD), DTD-Version 01-09-2004.
+     Element declarations as published in the standard; explanatory comments omitted. -->
+
+<!ELEMENT Version (#PCDATA)>
+<!ELEMENT Location (#PCDATA)>
+<!ELEMENT Comment (#PCDATA)>
+<!ELEMENT Length (#PCDATA)>
+<!ELEMENT References (#PCDATA)>
+<!ELEMENT From (#PCDATA)>
+<!ELEMENT To (#PCDATA)>
+<!ELEMENT AcceptNoTables (#PCDATA)>
+<!ELEMENT Alias (From, To)>
+<!ELEMENT MaxLength (#PCDATA)>
+<!ELEMENT TextEncapsulator (#PCDATA)>
+<!ELEMENT Accuracy (#PCDATA)>
+<!ELEMENT ImpliedAccuracy (#PCDATA)>
+<!ELEMENT Format (#PCDATA)>
+<!ELEMENT DecimalSymbol (#PCDATA)>
+<!ELEMENT DigitGroupingSymbol (#PCDATA)>
+<!ELEMENT Command (#PCDATA)>
+<!ELEMENT URL (#PCDATA)>
+<!ELEMENT Description (#PCDATA)>
+<!ELEMENT Name (#PCDATA)>
+<!ELEMENT Epoch (#PCDATA)>
+<!ELEMENT ColumnDelimiter (#PCDATA)>
+<!ELEMENT RecordDelimiter (#PCDATA)>
+<!ELEMENT SkipNumBytes (#PCDATA)>
+
+<!ELEMENT Extension (Name, URL)>
+<!ELEMENT Range (From, (To | Length)?)>
+<!ELEMENT FixedRange (From, (To | Length))>
+<!ELEMENT DataSet (Extension*, Version, DataSupplier?, Command*, Media+, Command*)>
+
+<!ELEMENT AlphaNumeric EMPTY>
+<!ELEMENT Date (Format?)>
+<!ELEMENT Numeric ((ImpliedAccuracy | Accuracy)?)>
+
+<!ELEMENT ANSI EMPTY>
+<!ELEMENT Macintosh EMPTY>
+<!ELEMENT OEM EMPTY>
+<!ELEMENT UTF16 EMPTY>
+<!ELEMENT UTF7 EMPTY>
+<!ELEMENT UTF8 EMPTY>
+
+<!ELEMENT FixedLength ((Length | RecordDelimiter)?, ((FixedPrimaryKey+, FixedColumn*) | (FixedColumn+)), ForeignKey*)>
+<!ELEMENT FixedColumn (Name, Description?, (Numeric | AlphaNumeric | Date), Map*, FixedRange)>
+<!ELEMENT FixedPrimaryKey (Name, Description?, (Numeric | AlphaNumeric | Date), Map*, FixedRange)>
+<!ELEMENT VariableLength (ColumnDelimiter?, RecordDelimiter?, TextEncapsulator?, ((VariablePrimaryKey+, VariableColumn*) | (VariableColumn+)), ForeignKey*)>
+<!ELEMENT VariableColumn (Name, Description?, (Numeric | (AlphaNumeric, MaxLength?) | Date), Map*)>
+<!ELEMENT VariablePrimaryKey (Name, Description?, (Numeric | (AlphaNumeric, MaxLength?) | Date), Map*)>
+
+<!ELEMENT DataSupplier (Name, Location, Comment)>
+<!ELEMENT Media (Name, Command*, Table*, Command*, AcceptNoTables?)>
+<!ELEMENT Table (URL, Name?, Description?, Validity?, (ANSI | Macintosh | OEM | UTF16 | UTF7 | UTF8)?, (DecimalSymbol, DigitGroupingSymbol)?, SkipNumBytes?, Range?, Epoch?, (VariableLength | FixedLength))>
+<!ELEMENT ForeignKey (Name+, References, Alias*)>
+<!ELEMENT Map (Description?, From, To)>
+<!ELEMENT Validity (Range, Format?)>

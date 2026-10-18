@@ -25,7 +25,8 @@ Projektwebsite: [sqonto.de](https://sqonto.de).
   Buchungen, Anlagenverzeichnis mit AfA (linear, GWG, Sammelposten), Festschreibung.
 - **Steuern & Berichte:** Umsatzsteuer-Voranmeldung (inkl. Dauerfristverlängerung und
   Kleinunternehmerregelung), Zusammenfassende Meldung (CSV-Import für ELSTER), EÜR, GuV, Bilanz, BWA, Summen- und Saldenliste, Auswertungen,
-  Dashboard, DATEV-Export (EXTF-Buchungsstapel), Beleg-ZIP, alle Berichte als PDF.
+  Dashboard, DATEV-Export (EXTF-Buchungsstapel), GoBD-Datenexport für Betriebsprüfungen
+  (Beschreibungsstandard, index.xml), Beleg-ZIP, alle Berichte als PDF.
 
 ## Schnellstart (Windows)
 

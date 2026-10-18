@@ -17,6 +17,7 @@ pub mod dunning;
 pub mod einvoice;
 pub mod email;
 pub mod finance;
+pub mod gdpdu;
 pub mod masterdata;
 pub mod posting;
 pub mod receipts;

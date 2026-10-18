@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Button, Card, Group, SimpleGrid, Stack, Text, TextInput, ThemeIcon } from '@mantine/core';
 import { DatePickerInput } from '@mantine/dates';
-import { IconArchive, IconCalendar, IconDatabaseExport, IconFileSpreadsheet, IconFileTypePdf, IconFileZip } from '@tabler/icons-react';
+import { IconArchive, IconCalendar, IconDatabaseExport, IconFileCertificate, IconFileSpreadsheet, IconFileTypePdf, IconFileZip } from '@tabler/icons-react';
 import dayjs from 'dayjs';
 import { downloadFile } from '@/api/client';
 import { notifyError } from '@/api/hooks';
@@ -39,6 +39,7 @@ export function ExportsPage() {
   const [advisor, setAdvisor] = useStoredState('sqonto.datev.advisor');
   const [client, setClient] = useStoredState('sqonto.datev.client');
   const [year, setYear] = useState(new Date().getFullYear());
+  const [auditYear, setAuditYear] = useState(new Date().getFullYear() - 1);
   const [busy, setBusy] = useState<string | null>(null);
   const dl = async (key: string, path: string, params?: Record<string, string | number | undefined>) => {
     setBusy(key);
@@ -106,6 +107,30 @@ export function ExportsPage() {
             <DatePickerInput type="range" label="Zeitraum" valueFormat="DD.MM.YYYY" value={range} onChange={(v) => setRange(v as [string | null, string | null])} leftSection={<IconCalendar size={16} />} />
             <Button variant="light" color="grape" leftSection={<IconFileZip size={16} />} loading={busy === 'zip'} onClick={() => dl('zip', '/exports/receipts', { from: range[0] ?? undefined, to: range[1] ?? undefined })} w="fit-content">
               Belege herunterladen
+            </Button>
+          </Stack>
+        </Card>
+        <Card>
+          <Group justify="space-between" mb="md" wrap="nowrap">
+            <Group wrap="nowrap">
+              <ThemeIcon size={40} radius="md" variant="light" color="orange">
+                <IconFileCertificate size={22} />
+              </ThemeIcon>
+              <div>
+                <Text fw={650}>Datenexport für die Betriebsprüfung</Text>
+                <Text size="sm" c="dimmed">
+                  GoBD-Datenträgerüberlassung nach § 147 Abs. 6 AO
+                </Text>
+              </div>
+            </Group>
+            <YearSelect value={auditYear} onChange={setAuditYear} />
+          </Group>
+          <Stack gap="sm">
+            <Text size="sm" c="dimmed">
+              Buchungsjournal, Kontenplan, Kontakte, Rechnungen, Belege, Zahlungen, Anlagen und Änderungsprotokoll des Jahres als CSV-Dateien mit Beschreibung (index.xml) im Beschreibungsstandard der Finanzverwaltung – lesbar mit IDEA und anderen Prüfprogrammen.
+            </Text>
+            <Button variant="light" color="orange" leftSection={<IconFileCertificate size={16} />} loading={busy === 'gdpdu'} onClick={() => dl('gdpdu', '/exports/gdpdu', { year: auditYear })} w="fit-content">
+              Datenexport herunterladen
             </Button>
           </Stack>
         </Card>

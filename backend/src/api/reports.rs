@@ -19,7 +19,7 @@ use crate::models::{FileMeta, Receipt, UstvaFiling};
 use crate::pdf::data::{self, ReportSection, col, trow};
 use crate::services::reports::{self, Analytics, Bwa, Dashboard, OpenItems, Statement, SusaRow, UstvaPeriod, UstvaReport};
 use crate::services::zm::{self, ZmPeriod, ZmReport};
-use crate::services::{assets, datev, settings as cfg};
+use crate::services::{assets, datev, gdpdu, settings as cfg};
 use crate::state::AppState;
 use crate::util::{fmt_date, fmt_money, fmt_num, today, ymd};
 
@@ -458,6 +458,13 @@ pub async fn datev(State(st): State<AppState>, Query(q): Query<DatevQ>) -> Resul
     let to = q.to.unwrap_or(ymd(y, 12, 31));
     let bytes = st.read(|c| datev::export(c, from, to, &q.advisor, &q.client))?;
     Ok(file_response(bytes, "text/csv; charset=windows-1252", &format!("EXTF_Buchungsstapel_{from}_{to}.csv"), true))
+}
+
+/// Datenträgerüberlassung for tax audits (GoBD) of one calendar year.
+pub async fn gdpdu_export(State(st): State<AppState>, Query(q): Query<YearQ>) -> Result<Response, AppError> {
+    let y = year(&q);
+    let bytes = st.read(|c| gdpdu::export(c, y))?;
+    Ok(file_response(bytes, "application/zip", &format!("GoBD-Datenexport_{y}.zip"), true))
 }
 
 pub async fn receipts_zip(State(st): State<AppState>, Query(q): Query<DatevQ>) -> Result<Response, AppError> {

@@ -142,6 +142,7 @@ pub fn router(state: AppState) -> Router {
         .route("/reports/pdf/{kind}", get(reports::report_pdf))
         .route("/exports/datev", get(reports::datev))
         .route("/exports/receipts", get(reports::receipts_zip))
+        .route("/exports/gdpdu", get(reports::gdpdu_export))
         .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
         .with_state(state);
     Router::new().nest("/api", api).fallback(static_handler)
