@@ -559,23 +559,24 @@ mod tests {
         assert_eq!(columns(&conn, "items").unwrap().len(), 2, "added columns rolled back");
     }
 
-    /// Schemas of the released versions (0.9.0 equals 0.9.1 except for the licence header); all
-    /// of them are version 1.
-    const RELEASED: &[(&str, &str)] = &[
-        ("0.9.1", include_str!("testdata/schema-0.9.1.sql")),
-        ("0.9.2", include_str!("testdata/schema-0.9.2.sql")),
-        ("0.9.3", include_str!("testdata/schema-0.9.3.sql")),
+    /// Schemas of the released versions (0.9.0 equals 0.9.1 except for the licence header).
+    /// (release, its schema version, its schema.sql)
+    const RELEASED: &[(&str, i64, &str)] = &[
+        ("0.9.1", 1, include_str!("testdata/schema-0.9.1.sql")),
+        ("0.9.2", 1, include_str!("testdata/schema-0.9.2.sql")),
+        ("0.9.3", 1, include_str!("testdata/schema-0.9.3.sql")),
+        ("0.10.0", 3, include_str!("testdata/schema-0.10.0.sql")),
     ];
 
     #[test]
     fn every_released_version_is_migrated_with_its_data() {
-        for (release, schema) in RELEASED {
+        for (release, version, schema) in RELEASED {
             let conn = Connection::open_in_memory().unwrap();
             conn.pragma_update(None, "foreign_keys", "ON").unwrap();
             conn.execute_batch(schema).unwrap();
+            conn.execute("INSERT INTO meta (key, value) VALUES ('schema_version', ?1)", [version.to_string()]).unwrap();
             conn.execute_batch(
-                "INSERT INTO meta (key, value) VALUES ('schema_version', '1');
-                 INSERT INTO contacts (id, company) VALUES (1, 'Kunde GmbH');
+                "INSERT INTO contacts (id, company) VALUES (1, 'Kunde GmbH');
                  INSERT INTO documents (id, doc_type, contact_id, date, number, gross_total) VALUES (1, 'invoice', 1, '2026-01-31', 'RE-1', '119');",
             )
             .unwrap();
@@ -623,7 +624,7 @@ mod tests {
         let path = dir.join("sqonto.db");
         {
             let conn = Connection::open(&path).unwrap();
-            conn.execute_batch(RELEASED[0].1).unwrap();
+            conn.execute_batch(RELEASED[0].2).unwrap();
             conn.execute_batch("INSERT INTO meta (key, value) VALUES ('schema_version', '1');").unwrap();
         }
         let conn = open(&path).unwrap();
