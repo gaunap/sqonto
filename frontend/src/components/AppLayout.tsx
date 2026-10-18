@@ -118,7 +118,7 @@ function useNavSections(counts: { overdue: number; transactions: number; drafts:
       title: 'Steuern & Berichte',
       items: [
         { label: 'Umsatzsteuer', to: '/steuern/ustva', icon: IconCalculator },
-        { label: 'Zusammenfassende Meldung', to: '/steuern/zm', icon: IconWorld },
+        { label: 'EU-Meldung (ZM)', to: '/steuern/zm', icon: IconWorld },
         { label: 'EÜR · GuV · Bilanz', to: '/berichte', icon: IconScale },
         { label: 'Auswertungen', to: '/auswertungen', icon: IconChartBar },
         { label: 'Exporte & DATEV', to: '/exporte', icon: IconFileDownload },
