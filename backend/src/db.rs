@@ -20,21 +20,17 @@ use serde::de::DeserializeOwned;
 /// The current schema; fresh databases are created from it directly.
 const SCHEMA: &str = include_str!("schema.sql");
 
-/// Changes to existing tables since schema version 1, in order: entry `n` (1-based) brings a
-/// database from version `n` to `n + 1`. New tables only need `schema.sql`
-/// (`CREATE TABLE IF NOT EXISTS`); new columns and data fixes need an entry here **and** the
-/// final definition in `schema.sql`.
+/// Data changes since schema version 1: entry `n` (1-based) brings a database from version `n` to
+/// `n + 1`. Tables and columns are not migrated here – `complete_tables` adds everything of
+/// `schema.sql` an older database lacks, whatever state it is in. An entry is only needed to change
+/// existing data (fill a new column, convert values); it runs after the tables are complete.
+/// New columns still count the version up, so that an older Sqonto refuses the database instead
+/// of writing rows without them.
 const MIGRATIONS: &[&str] = &[
-    // 1 → 2: Abo-Rechnungen finalize and send automatically, price changes
-    "ALTER TABLE recurring_invoices ADD COLUMN auto_finalize INTEGER NOT NULL DEFAULT 0;
-     ALTER TABLE recurring_invoices ADD COLUMN auto_send INTEGER NOT NULL DEFAULT 0;
-     ALTER TABLE recurring_invoices ADD COLUMN price_change_percent TEXT NOT NULL DEFAULT '0';
-     ALTER TABLE recurring_invoices ADD COLUMN price_change_from TEXT;
-     ALTER TABLE recurring_invoices ADD COLUMN price_change_yearly INTEGER NOT NULL DEFAULT 0;
-     ALTER TABLE recurring_invoices ADD COLUMN last_error TEXT NOT NULL DEFAULT '';",
-    // 2 → 3: SEPA-Lastschrift as payment method of invoices
-    "ALTER TABLE documents ADD COLUMN payment_method TEXT NOT NULL DEFAULT '';
-     ALTER TABLE documents ADD COLUMN mandate_id INTEGER;",
+    // 1 → 2: Abo-Rechnungen finalize and send automatically, price changes (columns only)
+    "",
+    // 2 → 3: SEPA-Lastschrift as payment method of documents (columns only)
+    "",
 ];
 
 pub const SCHEMA_VERSION: i64 = 1 + MIGRATIONS.len() as i64;
@@ -44,8 +40,24 @@ pub fn open(path: &Path) -> Result<Connection> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
+    if let Some(from) = stored_version(&conn)?.filter(|v| *v < SCHEMA_VERSION) {
+        backup_before_upgrade(&conn, path, from)?;
+    }
     migrate(&conn)?;
     Ok(conn)
+}
+
+/// Copy of the database before it is changed for a new version, in the `backups` folder next to
+/// it (the automatic backups never delete it).
+fn backup_before_upgrade(conn: &Connection, path: &Path, from: i64) -> Result<()> {
+    let dir = path.parent().unwrap_or_else(|| Path::new(".")).join("backups");
+    let target = dir.join(format!("Sqonto-vor-Update-Schema{from}-{SCHEMA_VERSION}_{}.db", chrono::Local::now().format("%Y-%m-%d_%H%M%S")));
+    std::fs::create_dir_all(&dir)
+        .map_err(anyhow::Error::from)
+        .and_then(|_| conn.backup(rusqlite::MAIN_DB, &target, None::<fn(rusqlite::backup::Progress)>).map_err(anyhow::Error::from))
+        .with_context(|| format!("Vor dem Datenbank-Update konnte keine Sicherung angelegt werden ({}). Die Datenbank wurde nicht verändert", target.display()))?;
+    tracing::info!("Sicherung vor dem Datenbank-Update: {}", target.display());
+    Ok(())
 }
 
 /// Fresh in-memory database with schema, for tests.
@@ -67,34 +79,95 @@ pub fn schema_version(conn: &Connection) -> Option<i64> {
     v.parse().ok()
 }
 
+/// Version of an existing database: stored, or 1 for databases from before the version was
+/// stored. None for a new, empty database.
+fn stored_version(conn: &Connection) -> Result<Option<i64>> {
+    if let Some(v) = schema_version(conn) {
+        return Ok(Some(v));
+    }
+    let tables = conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'", [], |r| r.get::<_, i64>(0))?;
+    Ok((tables > 0).then_some(1))
+}
+
+fn table_exists(conn: &Connection, table: &str) -> Result<bool> {
+    Ok(conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1", [table], |r| r.get::<_, i64>(0))? > 0)
+}
+
+struct ColumnInfo {
+    name: String,
+    ty: String,
+    not_null: bool,
+    default: Option<String>,
+}
+
+fn columns(conn: &Connection, table: &str) -> Result<Vec<ColumnInfo>> {
+    let mut stmt = conn.prepare("SELECT name, type, \"notnull\", dflt_value FROM pragma_table_info(?1) ORDER BY cid")?;
+    let rows = stmt.query_map([table], |r| Ok(ColumnInfo { name: r.get(0)?, ty: r.get(1)?, not_null: r.get::<_, i64>(2)? != 0, default: r.get(3)? }))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Adds every table and column of `schema` that the database lacks: tables with their exact
+/// definition, columns with type, NOT NULL and default (a NOT NULL column without default gets
+/// the empty value of its type, as existing rows need one). Returns what was added.
+fn complete_tables(conn: &Connection, schema: &str) -> Result<Vec<String>> {
+    let reference = Connection::open_in_memory()?;
+    reference.execute_batch(schema)?;
+    let mut stmt = reference.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY rowid")?;
+    let tables = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut added = Vec::new();
+    for (table, sql) in tables {
+        if !table_exists(conn, &table)? {
+            conn.execute_batch(&sql).with_context(|| format!("Tabelle {table} konnte nicht angelegt werden"))?;
+            added.push(table);
+            continue;
+        }
+        let have: std::collections::HashSet<String> = columns(conn, &table)?.into_iter().map(|c| c.name.to_lowercase()).collect();
+        for c in columns(&reference, &table)?.into_iter().filter(|c| !have.contains(&c.name.to_lowercase())) {
+            let mut def = format!("\"{}\" {}", c.name, c.ty);
+            if c.not_null {
+                def.push_str(" NOT NULL");
+            }
+            match (&c.default, c.not_null) {
+                (Some(d), _) => def.push_str(&format!(" DEFAULT {d}")),
+                (None, true) => def.push_str(if ["INT", "REAL", "NUM"].iter().any(|t| c.ty.to_uppercase().contains(t)) { " DEFAULT 0" } else { " DEFAULT ''" }),
+                (None, false) => {}
+            }
+            conn.execute_batch(&format!("ALTER TABLE \"{table}\" ADD COLUMN {def}")).with_context(|| format!("Spalte {table}.{} konnte nicht ergänzt werden", c.name))?;
+            added.push(format!("{table}.{}", c.name));
+        }
+    }
+    Ok(added)
+}
+
+/// Brings any older database to the current schema in one transaction – if anything fails,
+/// nothing is changed.
 fn migrate_with(conn: &Connection, schema: &str, migrations: &[&str]) -> Result<()> {
     let latest = 1 + migrations.len() as i64;
-    let has_meta = conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'meta'", [], |r| r.get::<_, i64>(0))? > 0;
-    let version = match schema_version(conn) {
-        Some(v) => v,
-        // Databases from before the version was stored are version 1.
-        None if has_meta => 1,
-        None => {
-            conn.execute_batch(schema)?;
-            set_schema_version(conn, latest)?;
-            return Ok(());
-        }
+    let tx = conn.unchecked_transaction()?;
+    let Some(version) = stored_version(&tx)? else {
+        tx.execute_batch(schema)?;
+        set_schema_version(&tx, latest)?;
+        tx.commit()?;
+        return Ok(());
     };
     if version > latest {
         anyhow::bail!(
             "Die Datenbank stammt aus einer neueren Sqonto-Version (Schema {version}, unterstützt bis {latest}). Bitte Sqonto aktualisieren."
         );
     }
-    for (i, sql) in migrations.iter().enumerate().skip((version - 1) as usize) {
+    let added = complete_tables(&tx, schema).context("Datenbank-Update fehlgeschlagen")?;
+    for (i, sql) in migrations.iter().enumerate().skip(version.max(1) as usize - 1) {
         let to = i as i64 + 2;
-        let tx = conn.unchecked_transaction()?;
         tx.execute_batch(sql).with_context(|| format!("Datenbank-Migration auf Schema {to} fehlgeschlagen"))?;
-        set_schema_version(&tx, to)?;
-        tx.commit()?;
-        tracing::info!("Datenbank auf Schema {to} aktualisiert");
     }
-    conn.execute_batch(schema)?;
-    set_schema_version(conn, latest)
+    // Indexes and anything else of the schema.
+    tx.execute_batch(schema).context("Datenbank-Update fehlgeschlagen")?;
+    set_schema_version(&tx, latest)?;
+    tx.commit()?;
+    if version < latest || !added.is_empty() {
+        tracing::info!("Datenbank von Schema {version} auf {latest} aktualisiert; ergänzt: {}", if added.is_empty() { "–".to_string() } else { added.join(", ") });
+    }
+    Ok(())
 }
 
 fn set_schema_version(conn: &Connection, version: i64) -> Result<()> {
@@ -414,13 +487,28 @@ pub fn meta_set(conn: &Connection, key: &str, value: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
 
     const OLD: &str = "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);\n\
                        CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, name TEXT NOT NULL);";
     const NEW: &str = "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);\n\
-                       CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, name TEXT NOT NULL, note TEXT NOT NULL DEFAULT '');\n\
-                       CREATE TABLE IF NOT EXISTS tags (id INTEGER PRIMARY KEY);";
-    const STEPS: &[&str] = &["ALTER TABLE items ADD COLUMN note TEXT NOT NULL DEFAULT '';", "UPDATE items SET note = 'migriert';"];
+                       CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, name TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', size INTEGER NOT NULL);\n\
+                       CREATE INDEX IF NOT EXISTS idx_items_note ON items(note);\n\
+                       CREATE TABLE IF NOT EXISTS tags (id INTEGER PRIMARY KEY, color TEXT NOT NULL DEFAULT 'rot');";
+    const STEPS: &[&str] = &["", "UPDATE items SET note = 'migriert';"];
+
+    /// Tables and their columns.
+    fn shape(conn: &Connection) -> BTreeMap<String, BTreeSet<String>> {
+        let mut stmt = conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").unwrap();
+        let tables: Vec<String> = stmt.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect();
+        tables.into_iter().map(|t| (t.clone(), columns(conn, &t).unwrap().into_iter().map(|c| c.name).collect())).collect()
+    }
+
+    fn reference() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(SCHEMA).unwrap();
+        c
+    }
 
     #[test]
     fn current_schema_is_created_fresh() {
@@ -429,18 +517,28 @@ mod tests {
     }
 
     #[test]
-    fn older_databases_are_migrated_in_order() {
+    fn older_databases_are_completed_and_migrated() {
         let conn = Connection::open_in_memory().unwrap();
         migrate_with(&conn, OLD, &[]).unwrap();
         conn.execute("INSERT INTO items (name) VALUES ('alt')", []).unwrap();
         migrate_with(&conn, NEW, STEPS).unwrap();
         assert_eq!(schema_version(&conn), Some(3));
-        let note: String = conn.query_row("SELECT note FROM items", [], |r| r.get(0)).unwrap();
-        assert_eq!(note, "migriert");
+        let (note, size): (String, i64) = conn.query_row("SELECT note, size FROM items", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((note.as_str(), size), ("migriert", 0), "NOT NULL column without default gets the empty value");
         conn.execute("INSERT INTO tags DEFAULT VALUES", []).unwrap();
         // Running again changes nothing.
         migrate_with(&conn, NEW, STEPS).unwrap();
         assert_eq!(schema_version(&conn), Some(3));
+    }
+
+    #[test]
+    fn databases_without_version_are_version_1() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(OLD).unwrap();
+        conn.execute_batch("DROP TABLE meta;").unwrap();
+        migrate_with(&conn, NEW, STEPS).unwrap();
+        assert_eq!(schema_version(&conn), Some(3));
+        assert!(columns(&conn, "items").unwrap().iter().any(|c| c.name == "note"));
     }
 
     #[test]
@@ -452,10 +550,93 @@ mod tests {
     }
 
     #[test]
-    fn failed_migration_keeps_the_previous_version() {
+    fn failed_migration_changes_nothing() {
         let conn = Connection::open_in_memory().unwrap();
         migrate_with(&conn, OLD, &[]).unwrap();
-        assert!(migrate_with(&conn, NEW, &["ALTER TABLE items ADD COLUMN note TEXT;", "SELECT * FROM fehlt;"]).is_err());
-        assert_eq!(schema_version(&conn), Some(2), "first step committed, second rolled back");
+        assert!(migrate_with(&conn, NEW, &["", "SELECT * FROM fehlt;"]).is_err());
+        assert_eq!(schema_version(&conn), Some(1));
+        assert!(!table_exists(&conn, "tags").unwrap(), "added table rolled back");
+        assert_eq!(columns(&conn, "items").unwrap().len(), 2, "added columns rolled back");
+    }
+
+    /// Schemas of the released versions (0.9.0 equals 0.9.1 except for the licence header); all
+    /// of them are version 1.
+    const RELEASED: &[(&str, &str)] = &[
+        ("0.9.1", include_str!("testdata/schema-0.9.1.sql")),
+        ("0.9.2", include_str!("testdata/schema-0.9.2.sql")),
+        ("0.9.3", include_str!("testdata/schema-0.9.3.sql")),
+    ];
+
+    #[test]
+    fn every_released_version_is_migrated_with_its_data() {
+        for (release, schema) in RELEASED {
+            let conn = Connection::open_in_memory().unwrap();
+            conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+            conn.execute_batch(schema).unwrap();
+            conn.execute_batch(
+                "INSERT INTO meta (key, value) VALUES ('schema_version', '1');
+                 INSERT INTO contacts (id, company) VALUES (1, 'Kunde GmbH');
+                 INSERT INTO documents (id, doc_type, contact_id, date, number, gross_total) VALUES (1, 'invoice', 1, '2026-01-31', 'RE-1', '119');",
+            )
+            .unwrap();
+            migrate(&conn).unwrap_or_else(|e| panic!("{release}: {e:#}"));
+            assert_eq!(schema_version(&conn), Some(SCHEMA_VERSION), "{release}");
+            assert_eq!(shape(&conn), shape(&reference()), "{release}");
+            let (number, method): (String, String) = conn.query_row("SELECT number, payment_method FROM documents WHERE id = 1", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+            assert_eq!((number.as_str(), method.as_str()), ("RE-1", ""), "{release}");
+            conn.execute("INSERT INTO recurring_invoices (template_id, next_date, auto_finalize) VALUES (1, '2026-02-28', 1)", []).unwrap();
+            // The entities read the migrated rows.
+            assert_eq!(query::<crate::models::Document>(&conn, "", &[]).unwrap().len(), 1, "{release}");
+            assert_eq!(query::<crate::models::RecurringInvoice>(&conn, "", &[]).unwrap().len(), 1, "{release}");
+        }
+    }
+
+    #[test]
+    fn every_partial_state_is_completed() {
+        let full = shape(&reference());
+        // Each table missing (older versions lack the newer tables) …
+        for table in full.keys().filter(|t| *t != "meta") {
+            let conn = reference();
+            conn.execute_batch(&format!("DROP TABLE \"{table}\"; INSERT OR REPLACE INTO meta VALUES ('schema_version', '1');")).unwrap();
+            migrate(&conn).unwrap_or_else(|e| panic!("without {table}: {e:#}"));
+            assert_eq!(shape(&conn), full, "without {table}");
+        }
+        // … and each column missing that SQLite can drop (columns are only ever added).
+        for (table, cols) in full.iter().filter(|(t, _)| *t != "meta") {
+            for col in cols {
+                let conn = reference();
+                if conn.execute_batch(&format!("ALTER TABLE \"{table}\" DROP COLUMN \"{col}\"")).is_err() {
+                    continue;
+                }
+                conn.execute_batch("INSERT OR REPLACE INTO meta VALUES ('schema_version', '1');").unwrap();
+                migrate(&conn).unwrap_or_else(|e| panic!("without {table}.{col}: {e:#}"));
+                assert_eq!(shape(&conn), full, "without {table}.{col}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_backup_is_made_before_an_upgrade() {
+        let dir = std::env::temp_dir().join(format!("sqonto-db-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sqonto.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(RELEASED[0].1).unwrap();
+            conn.execute_batch("INSERT INTO meta (key, value) VALUES ('schema_version', '1');").unwrap();
+        }
+        let conn = open(&path).unwrap();
+        assert_eq!(schema_version(&conn), Some(SCHEMA_VERSION));
+        let backups: Vec<String> = std::fs::read_dir(dir.join("backups")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+        assert_eq!(backups.len(), 1, "{backups:?}");
+        assert!(backups[0].starts_with(&format!("Sqonto-vor-Update-Schema1-{SCHEMA_VERSION}_")));
+        let old = Connection::open(dir.join("backups").join(&backups[0])).unwrap();
+        assert_eq!(schema_version(&old), Some(1), "the backup is the unchanged database");
+        drop((conn, old));
+        // Opening the current version again needs no backup.
+        open(&path).unwrap();
+        assert_eq!(std::fs::read_dir(dir.join("backups")).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
