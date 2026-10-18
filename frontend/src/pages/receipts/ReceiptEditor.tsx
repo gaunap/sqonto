@@ -109,7 +109,7 @@ function FilePanel({ file, onUpload, uploading, parsed }: { file: FileMeta | nul
   const isImage = file?.mime.startsWith('image/');
   const isXml = file?.mime.includes('xml');
   return (
-    <Card padding="md" pos="sticky" top={74}>
+    <Card padding="md" pos="sticky" top="var(--app-sticky-top)">
       {!file ? (
         <Dropzone onDrop={(f) => f[0] && onUpload(f[0])} accept={RECEIPT_ACCEPT} maxFiles={1} loading={uploading} h={520} radius="md">
           <Center h={480} style={{ pointerEvents: 'none' }}>

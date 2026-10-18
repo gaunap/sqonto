@@ -61,6 +61,7 @@ import {
 import { useApi, useStatus } from '@/api/hooks';
 import { SqontoLogo } from '@/components/ui';
 import { useUpdateNotice } from '@/components/UpdateNotice';
+import { WindowControls, hasTitlebar, titlebarMouseDown, useTitlebarHost } from '@/lib/desktop';
 import type { Dashboard, SearchHit } from '@/api/types';
 
 interface NavItem {
@@ -253,6 +254,7 @@ export function AppLayout() {
   };
   const sections = useNavSections(counts);
   const update = useUpdateNotice(!!status?.onboarded);
+  useTitlebarHost();
 
   // Only redirect on fresh data – a stale cached status (e.g. right after onboarding) must not bounce the user back.
   useEffect(() => {
@@ -261,6 +263,8 @@ export function AppLayout() {
 
   useEffect(() => {
     window.scrollTo(0, 0);
+    // With the desktop title bar the main area scrolls instead of the page.
+    document.querySelector('.mantine-AppShell-main')?.scrollTo(0, 0);
   }, [location.pathname]);
 
   useHotkeys([
@@ -287,8 +291,9 @@ export function AppLayout() {
         header: { background: 'var(--app-surface)', borderColor: 'var(--app-border)' },
       }}
     >
-      <AppShell.Header px="md">
-        <Group h="100%" justify="space-between" wrap="nowrap" gap="md">
+      {/* In the desktop app on Windows the header is the title bar: drag it, double-click to maximize. */}
+      <AppShell.Header pl="md" pr={hasTitlebar ? 0 : 'md'} onMouseDown={titlebarMouseDown} style={{ display: 'flex' }}>
+        <Group h="100%" justify="space-between" wrap="nowrap" gap="md" style={{ flex: 1, minWidth: 0 }}>
           <Group gap="sm" wrap="nowrap" style={{ minWidth: 0, flexShrink: 1 }}>
             <Burger opened={opened} onClick={toggle} hiddenFrom="md" size="sm" />
             <UnstyledButton onClick={() => navigate('/')}>
@@ -381,6 +386,8 @@ export function AppLayout() {
             </Tooltip>
           </Group>
         </Group>
+        {hasTitlebar && <div style={{ width: 1, alignSelf: 'center', height: 24, marginLeft: 12, background: 'var(--app-border)', flexShrink: 0 }} />}
+        <WindowControls />
       </AppShell.Header>
 
       <AppShell.Navbar p="xs">

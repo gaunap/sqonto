@@ -5,6 +5,8 @@
  */
 
 :root {
+  /* Offset of sticky side columns (editor preview) from the top of the scrolling area */
+  --app-sticky-top: 74px;
   --app-bg: #f6f7f9;
   --app-surface: #ffffff;
   --app-border: #e7e9ee;
@@ -190,4 +192,109 @@ body {
   .mantine-AppShell-header {
     display: none !important;
   }
+}
+
+/* Title bar of the desktop app on Windows (lib/desktop.tsx): caption buttons like Windows 11 */
+.window-controls {
+  display: flex;
+  align-self: stretch;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+}
+
+.window-controls button {
+  width: 46px;
+  height: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--mantine-color-text);
+  font-family: 'Segoe Fluent Icons', 'Segoe MDL2 Assets';
+  font-size: 10px;
+  cursor: default;
+  transition: background-color 80ms ease;
+}
+
+.window-controls[data-inactive] button {
+  color: var(--app-muted);
+}
+
+.window-controls button:hover {
+  background: rgba(0, 0, 0, 0.055);
+}
+
+.window-controls button:active {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+[data-mantine-color-scheme='dark'] .window-controls button:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+[data-mantine-color-scheme='dark'] .window-controls button:active {
+  background: rgba(255, 255, 255, 0.11);
+}
+
+.window-controls button.close:hover {
+  background: #c42b1c;
+  color: #fff;
+}
+
+.window-controls button.close:active {
+  background: #b22a1b;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+/* With the title bar only the content below the header scrolls, so that the scrollbar does not
+   reach up beside the header and the caption buttons sit at the window edge. */
+html[data-titlebar] {
+  --app-sticky-top: 16px;
+}
+
+html[data-titlebar] .mantine-AppShell-main {
+  margin-top: var(--app-shell-header-offset, 0rem);
+  padding-top: 0 !important;
+  min-height: 0;
+  height: calc(100vh - var(--app-shell-header-offset, 0rem));
+  overflow-y: auto;
+}
+
+/* Title bar on pages without the app header */
+.window-strip {
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: 36px;
+  display: flex;
+  justify-content: flex-end;
+  z-index: 1000;
+}
+
+/* Top resize edge of the frameless window */
+.window-edge {
+  position: fixed;
+  top: 0;
+  z-index: 1001;
+}
+
+.window-edge.n {
+  left: 8px;
+  right: 8px;
+  height: 4px;
+  cursor: n-resize;
+}
+
+.window-edge.nw,
+.window-edge.ne {
+  width: 8px;
+  height: 8px;
+}
+
+.window-edge.nw {
+  left: 0;
+  cursor: nw-resize;
+}
+
+.window-edge.ne {
+  right: 0;
+  cursor: ne-resize;
 }

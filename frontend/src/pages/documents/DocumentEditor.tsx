@@ -470,7 +470,7 @@ export function DocumentEditorPage() {
         </Grid.Col>
         {sidePreview && (
           <Grid.Col span={5}>
-            <Box pos="sticky" top={74}>
+            <Box pos="sticky" top="var(--app-sticky-top)">
               <Group justify="space-between" mb="xs">
                 <Text size="sm" fw={600} c="dimmed">
                   Live-Vorschau

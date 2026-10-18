@@ -26,7 +26,7 @@ import './styles.css';
 
 import { theme } from './theme';
 import { router } from './router';
-import { installDesktopBridge } from './lib/desktop';
+import { WindowChrome, installDesktopBridge } from './lib/desktop';
 
 dayjs.extend(customParseFormat);
 dayjs.locale('de');
@@ -48,6 +48,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           <ModalsProvider labels={{ confirm: 'Bestätigen', cancel: 'Abbrechen' }}>
             <Notifications position="top-right" limit={4} />
             <RouterProvider router={router} />
+            <WindowChrome />
           </ModalsProvider>
         </QueryClientProvider>
       </DatesProvider>

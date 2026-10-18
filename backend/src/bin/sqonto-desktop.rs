@@ -6,6 +6,9 @@
 //! shows the interface in a native window (WebView2 on Windows, WebKit on macOS/Linux) – without
 //! console window and without browser.
 //!
+//! On Windows the window has no native frame: the app's header is the title bar (drawn by the
+//! frontend, see `lib/desktop.tsx`), which moves, resizes and controls the window through IPC.
+//!
 //! Development: `SQONTO_DESKTOP_URL=http://localhost:5173` shows the Vite dev server (hot reload)
 //! instead of the embedded frontend; `SQONTO_DEVTOOLS=1` enables the developer tools.
 
@@ -22,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use tao::dpi::{LogicalSize, PhysicalPosition};
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoop, EventLoopBuilder, EventLoopWindowTarget};
-use tao::window::{Icon, Window, WindowBuilder, WindowId};
+use tao::window::{Icon, ResizeDirection, Window, WindowBuilder, WindowId};
 use wry::{NewWindowResponse, WebContext, WebView, WebViewBuilder};
 
 const WEBVIEW2_DOWNLOAD: &str = "https://go.microsoft.com/fwlink/p/?LinkId=2124703";
@@ -40,7 +43,12 @@ enum UserEvent {
     Downloaded(PathBuf),
     /// An update was installed: end, the new version starts itself.
     Quit,
+    /// Title bar of the page: minimize, maximize, close, drag, resize-<edge>, state.
+    WindowCommand(String),
 }
+
+/// The page draws the title bar itself (Windows; elsewhere the native frame stays).
+const CUSTOM_TITLEBAR: bool = cfg!(windows);
 
 #[derive(Serialize, Deserialize)]
 struct WindowState {
@@ -106,10 +114,12 @@ fn run(dir: &Path, app_url: String, start_url: String) -> ! {
         let proxy_dl = proxy.clone();
         let allowed_nav = allowed.clone();
         let downloads_ipc = downloads.clone();
+        let proxy_ipc = proxy.clone();
+        let init = if CUSTOM_TITLEBAR { "window.__SQONTO_DESKTOP__ = true; window.__SQONTO_TITLEBAR__ = true;" } else { "window.__SQONTO_DESKTOP__ = true;" };
         let builder = WebViewBuilder::new_with_web_context(&mut web_context)
             .with_url(&start_url)
             .with_devtools(devtools())
-            .with_initialization_script("window.__SQONTO_DESKTOP__ = true;")
+            .with_initialization_script(init)
             .with_navigation_handler(move |url| keep_inside(&url, &allowed_nav))
             .with_new_window_req_handler(move |url, _| {
                 let _ = proxy_nw.send_event(UserEvent::OpenWindow(url));
@@ -121,7 +131,12 @@ fn run(dir: &Path, app_url: String, start_url: String) -> ! {
                     let _ = proxy_dl.send_event(UserEvent::Downloaded(path));
                 }
             })
-            .with_ipc_handler(move |req| handle_ipc(req.body(), &downloads_ipc.borrow()));
+            .with_ipc_handler(move |req| match req.body().strip_prefix("window:") {
+                Some(command) => {
+                    let _ = proxy_ipc.send_event(UserEvent::WindowCommand(command.to_string()));
+                }
+                None => handle_ipc(req.body(), &downloads_ipc.borrow()),
+            });
         builder.build(&window).unwrap_or_else(|e| webview_missing(&e))
     };
 
@@ -144,6 +159,35 @@ fn run(dir: &Path, app_url: String, start_url: String) -> ! {
                     *control_flow = ControlFlow::Exit;
                 }
             }
+            Event::WindowEvent { window_id, event: WindowEvent::Resized(_) | WindowEvent::Focused(_), .. } if CUSTOM_TITLEBAR && window_id == window.id() => {
+                send_window_state(&window, &webview);
+            }
+            Event::UserEvent(UserEvent::WindowCommand(command)) => match command.as_str() {
+                "minimize" => window.set_minimized(true),
+                "maximize" => window.set_maximized(!window.is_maximized()),
+                "drag" => {
+                    let _ = window.drag_window();
+                }
+                "close" => {
+                    let p = proxy.clone();
+                    if webview.evaluate_script_with_callback(UNSAVED_JS, move |r| {
+                        let _ = p.send_event(UserEvent::CloseCheck(r));
+                    })
+                    .is_err()
+                    {
+                        save_state(&window, &state_file);
+                        *control_flow = ControlFlow::Exit;
+                    }
+                }
+                "state" => send_window_state(&window, &webview),
+                other => {
+                    if let Some(edge) = other.strip_prefix("resize-").and_then(resize_direction)
+                        && !window.is_maximized()
+                    {
+                        let _ = window.drag_resize_window(edge);
+                    }
+                }
+            },
             Event::UserEvent(UserEvent::CloseCheck(answer)) => {
                 let unsaved = answer.trim_matches('"').parse::<f64>().unwrap_or(0.0) > 0.0;
                 if !unsaved
@@ -191,6 +235,13 @@ fn run(dir: &Path, app_url: String, start_url: String) -> ! {
 fn main_window(event_loop: &EventLoop<UserEvent>, state_file: &Path) -> Result<Window, tao::error::OsError> {
     let saved: Option<WindowState> = std::fs::read(state_file).ok().and_then(|b| serde_json::from_slice(&b).ok());
     let mut builder = WindowBuilder::new().with_title("Sqonto").with_min_inner_size(LogicalSize::new(900.0, 600.0)).with_window_icon(app_icon());
+    #[cfg(windows)]
+    {
+        // Without frame, but with the shadow, the rounded corners (Windows 11) and the invisible
+        // resize borders of a normal window; the top edge is resized through the page.
+        use tao::platform::windows::WindowBuilderExtWindows;
+        builder = builder.with_decorations(false).with_undecorated_shadow(true);
+    }
     match saved {
         Some(s) => {
             builder = builder.with_inner_size(LogicalSize::new(s.width.max(900.0), s.height.max(600.0))).with_maximized(s.maximized);
@@ -233,6 +284,30 @@ fn popup(
         .with_download_started_handler(save_dialog(last_dir))
         .build(&window)?;
     Ok((window, webview))
+}
+
+/// Tells the page whether the window is maximized (restore button, no resize edge) and active.
+fn send_window_state(window: &Window, webview: &WebView) {
+    let script = format!(
+        "window.__sqontoWindowState && window.__sqontoWindowState({{ maximized: {}, focused: {} }})",
+        window.is_maximized(),
+        window.is_focused()
+    );
+    let _ = webview.evaluate_script(&script);
+}
+
+fn resize_direction(edge: &str) -> Option<ResizeDirection> {
+    Some(match edge {
+        "n" => ResizeDirection::North,
+        "ne" => ResizeDirection::NorthEast,
+        "nw" => ResizeDirection::NorthWest,
+        "e" => ResizeDirection::East,
+        "w" => ResizeDirection::West,
+        "s" => ResizeDirection::South,
+        "se" => ResizeDirection::SouthEast,
+        "sw" => ResizeDirection::SouthWest,
+        _ => return None,
+    })
 }
 
 /// Navigation inside the app stays in the window; everything else (mailto:, websites) is handed
