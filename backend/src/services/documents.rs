@@ -6,7 +6,7 @@
 //! partial / final invoices, credit notes and cancellations.
 
 use anyhow::Result;
-use chrono::{Duration, NaiveDate};
+use chrono::{Datelike, Duration, NaiveDate};
 use rusqlite::Connection;
 use rust_decimal::Decimal;
 use rust_decimal::prelude::Signed;
@@ -1023,6 +1023,25 @@ pub fn placeholders(s: &Settings, doc: &Document, contact: Option<&Contact>) -> 
         ("Firma", s.company.name.clone()),
         ("Referenz", doc.reference.clone()),
         ("Kundennummer", contact.map(|c| c.number.clone()).unwrap_or_default()),
+    ]
+    .into_iter()
+    .chain(period_placeholders(doc))
+    .collect()
+}
+
+/// Placeholders of the service period (start of the period, else the document date), e.g. for the
+/// positions of an Abo-Rechnung: "Wartung {{Monat}}" becomes "Wartung März 2026".
+pub fn period_placeholders(doc: &Document) -> Vec<(&'static str, String)> {
+    let start = doc.service_date.unwrap_or(doc.date);
+    let period = match (doc.service_date, doc.service_date_end) {
+        (Some(a), Some(b)) if a != b => format!("{} – {}", fmt_date(a), fmt_date(b)),
+        _ => fmt_date(start),
+    };
+    vec![
+        ("Leistungszeitraum", period),
+        ("Monat", format!("{} {}", util::month_name(start.month()), start.year())),
+        ("Quartal", format!("{}. Quartal {}", start.month0() / 3 + 1, start.year())),
+        ("Jahr", start.year().to_string()),
     ]
 }
 

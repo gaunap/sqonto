@@ -24,7 +24,15 @@ const SCHEMA: &str = include_str!("schema.sql");
 /// database from version `n` to `n + 1`. New tables only need `schema.sql`
 /// (`CREATE TABLE IF NOT EXISTS`); new columns and data fixes need an entry here **and** the
 /// final definition in `schema.sql`.
-const MIGRATIONS: &[&str] = &[];
+const MIGRATIONS: &[&str] = &[
+    // 1 → 2: Abo-Rechnungen finalize and send automatically, price changes
+    "ALTER TABLE recurring_invoices ADD COLUMN auto_finalize INTEGER NOT NULL DEFAULT 0;
+     ALTER TABLE recurring_invoices ADD COLUMN auto_send INTEGER NOT NULL DEFAULT 0;
+     ALTER TABLE recurring_invoices ADD COLUMN price_change_percent TEXT NOT NULL DEFAULT '0';
+     ALTER TABLE recurring_invoices ADD COLUMN price_change_from TEXT;
+     ALTER TABLE recurring_invoices ADD COLUMN price_change_yearly INTEGER NOT NULL DEFAULT 0;
+     ALTER TABLE recurring_invoices ADD COLUMN last_error TEXT NOT NULL DEFAULT '';",
+];
 
 pub const SCHEMA_VERSION: i64 = 1 + MIGRATIONS.len() as i64;
 

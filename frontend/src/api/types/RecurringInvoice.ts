@@ -15,4 +15,28 @@ cycle: string,
 /**
  * Day of the month the invoices are dated (short months use their last day).
  */
-day: number, next_date: string, end_date: string | null, active: boolean, last_document_id: number | null, created_at: string, };
+day: number, next_date: string, end_date: string | null, active: boolean, last_document_id: number | null, created_at: string, 
+/**
+ * Finalize the created invoices right away instead of leaving drafts.
+ */
+auto_finalize: boolean, 
+/**
+ * Send finalized invoices by e-mail to the customer (needs SMTP).
+ */
+auto_send: boolean, 
+/**
+ * Price change of the item prices, e.g. 3 = +3 %; 0 = none.
+ */
+price_change_percent: number, 
+/**
+ * First period with the changed prices.
+ */
+price_change_from: string | null, 
+/**
+ * Apply the change again every year after `price_change_from`.
+ */
+price_change_yearly: boolean, 
+/**
+ * Why the last automatic finalizing or sending failed; empty after a successful run.
+ */
+last_error: string, };

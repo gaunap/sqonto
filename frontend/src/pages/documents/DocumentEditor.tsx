@@ -44,7 +44,7 @@ import { date as fmtDate, money, today } from '@/lib/format';
 import { useLeaveWarning } from '@/lib/desktop';
 import { DOC_TYPES, EINVOICE_FORMATS, TAX_MODES, docLabel, type DocType } from '@/lib/labels';
 
-const PLACEHOLDERS = ['Anrede', 'Kunde', 'Ansprechpartner', 'Nummer', 'Datum', 'Betrag', 'Fällig am', 'Zahlungsziel', 'Gültig bis', 'Skonto', 'Firma', 'Referenz', 'Kundennummer'];
+const PLACEHOLDERS = ['Anrede', 'Kunde', 'Ansprechpartner', 'Nummer', 'Datum', 'Betrag', 'Fällig am', 'Zahlungsziel', 'Gültig bis', 'Skonto', 'Firma', 'Referenz', 'Kundennummer', 'Leistungszeitraum', 'Monat', 'Quartal', 'Jahr'];
 
 function PlaceholderMenu({ onInsert }: { onInsert: (p: string) => void }) {
   return (

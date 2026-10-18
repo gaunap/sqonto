@@ -254,6 +254,10 @@ pub fn document_job(
         _ => "Lieferscheinnr.",
     };
     let number = if doc.number.is_empty() { "Entwurf".to_string() } else { doc.number.clone() };
+    // Placeholders also work in the title and the positions (e.g. "Wartung {{Monat}}").
+    let vars = documents::placeholders(&s, doc, contact.as_ref());
+    let fill = |t: &str| util::fill_placeholders(t, &vars);
+    let title = fill(&doc.title);
     let mut info: Vec<(String, String)> = vec![(number_label.into(), number.clone()), ("Datum".into(), fmt_date(doc.date))];
     if let Some(c) = &contact
         && !c.number.is_empty()
@@ -295,8 +299,8 @@ pub fn document_job(
                     kind: "item".into(),
                     pos: pos.to_string(),
                     number: l.article_number.clone(),
-                    name: l.name.clone(),
-                    description: l.description.clone(),
+                    name: fill(&l.name),
+                    description: fill(&l.description),
                     qty: fmt_qty(l.quantity),
                     unit: l.unit.clone(),
                     price: fmt_price(l.unit_price),
@@ -309,8 +313,8 @@ pub fn document_job(
                 kind: "text".into(),
                 pos: String::new(),
                 number: String::new(),
-                name: l.name.clone(),
-                description: l.description.clone(),
+                name: fill(&l.name),
+                description: fill(&l.description),
                 qty: String::new(),
                 unit: String::new(),
                 price: String::new(),
@@ -349,7 +353,6 @@ pub fn document_job(
     }
 
     let totals_rows = if is_delivery { vec![] } else { totals_json(doc, &totals) };
-    let vars = documents::placeholders(&s, doc, contact.as_ref());
     let intro = util::fill_placeholders(&doc.intro_text, &vars);
     let closing = util::fill_placeholders(&doc.closing_text, &vars);
     let mut notes = tax_note(doc, contact.as_ref(), &s);
@@ -377,14 +380,14 @@ pub fn document_job(
         giro = json!({ "file": "girocode.svg", "amount": fmt_money(giro_amount), "iban": util::format_iban(&s.company.iban), "reference": number });
     }
 
-    let heading = if doc.number.is_empty() { label.to_string() } else { format!("{} {}", doc.title, doc.number) };
+    let heading = if doc.number.is_empty() { label.to_string() } else { format!("{title} {}", doc.number) };
     let data = json!({
         "layout": layout_v,
         "company": company_json(&s, &layout),
         "doc": {
             "kind": doc.doc_type,
             "label": label,
-            "title": doc.title,
+            "title": title,
             "heading": heading,
             "number": number,
             "is_draft": doc.status == "draft",

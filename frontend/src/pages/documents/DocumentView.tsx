@@ -65,7 +65,7 @@ import { notifyError, useAction, useApi, useSettings } from '@/api/hooks';
 import type { DocumentFull, EinvoiceCheck, EmailDraft, EmailRequest, IdResponse, Pages, RecurringView } from '@/api/types';
 import { PaymentModal } from '@/components/PaymentModal';
 import { PagesPreview } from '@/components/DocumentParts';
-import { CYCLES, RecurringModal } from '@/components/Recurring';
+import { CYCLES, RecurringError, RecurringModal, recurringMode } from '@/components/Recurring';
 import { InfoRow, Money, Page, PageHeader, SectionCard, StatusBadge, confirmAction } from '@/components/ui';
 import { documentIncoming, documentRemaining } from '@/lib/calc';
 import { date, dateTime, money, relativeDays } from '@/lib/format';
@@ -757,9 +757,16 @@ export function DocumentViewPage() {
               >
                 <Text size="sm">
                   {CYCLES.find((c) => c.value === recurring.cycle)?.label ?? recurring.cycle}
-                  {recurring.active ? ` · nächster Entwurf am ${date(recurring.next_date)}` : ' · beendet'}
+                  {recurring.active ? ` · nächste Rechnung am ${date(recurring.next_date)}` : ' · beendet'}
                   {recurring.end_date ? ` · bis ${date(recurring.end_date)}` : ''}
                 </Text>
+                <Text size="xs" c="dimmed">
+                  {recurringMode(recurring)}
+                  {recurring.price_change_percent !== 0 && recurring.price_change_from
+                    ? ` · Preise ${recurring.price_change_percent > 0 ? '+' : ''}${recurring.price_change_percent.toLocaleString('de-DE')} % ab ${date(recurring.price_change_from)}${recurring.price_change_yearly ? ', jährlich' : ''}`
+                    : ''}
+                </Text>
+                <RecurringError message={recurring.last_error} />
               </SectionCard>
             )}
 
@@ -816,7 +823,7 @@ export function DocumentViewPage() {
       {canPartial && <PartialModal opened={partialOpen} onClose={() => setPartialOpen(false)} doc={data} />}
       {isInvoice && <DunningModal opened={dunningOpen} onClose={() => setDunningOpen(false)} doc={data} />}
       <SendEmailModal opened={sendOpen} onClose={() => setSendOpen(false)} doc={data} />
-      {isInvoice && <RecurringModal opened={recurringOpen} onClose={() => setRecurringOpen(false)} templateId={doc.id} templateDate={doc.date} existing={recurring} />}
+      {isInvoice && <RecurringModal opened={recurringOpen} onClose={() => setRecurringOpen(false)} templateId={doc.id} templateDate={doc.date} existing={recurring} contactEmail={data.contact?.email} />}
     </Page>
   );
 }

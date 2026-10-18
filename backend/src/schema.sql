@@ -240,7 +240,13 @@ CREATE TABLE IF NOT EXISTS recurring_invoices (
   end_date         TEXT,
   active           INTEGER NOT NULL DEFAULT 1,
   last_document_id INTEGER,
-  created_at       TEXT NOT NULL DEFAULT ''
+  created_at       TEXT NOT NULL DEFAULT '',
+  auto_finalize    INTEGER NOT NULL DEFAULT 0,
+  auto_send        INTEGER NOT NULL DEFAULT 0,
+  price_change_percent TEXT NOT NULL DEFAULT '0',
+  price_change_from    TEXT,
+  price_change_yearly  INTEGER NOT NULL DEFAULT 0,
+  last_error       TEXT NOT NULL DEFAULT ''
 );
 
 -- Bankregeln: automatic booking of recurring bank movements

@@ -181,6 +181,7 @@ pub fn generate_cii(conn: &Connection, doc: &Document, guideline: &str) -> Resul
 
     x.push_str("<rsm:SupplyChainTradeTransaction>");
     // Lines
+    let vars = crate::services::documents::placeholders(&s, doc, (contact.id > 0).then_some(&contact));
     let mut line_no = 0;
     let mut line_total_sum = Decimal::ZERO;
     for l in lines.iter().filter(|l| l.line_type == "item" || l.line_type == "deduction") {
@@ -203,10 +204,10 @@ pub fn generate_cii(conn: &Connection, doc: &Document, guideline: &str) -> Resul
         if !l.article_number.is_empty() {
             let _ = write!(x, "<ram:SellerAssignedID>{}</ram:SellerAssignedID>", esc(&l.article_number));
         }
-        let name = if l.name.is_empty() { "Position".to_string() } else { l.name.clone() };
+        let name = if l.name.is_empty() { "Position".to_string() } else { util::fill_placeholders(&l.name, &vars) };
         let _ = write!(x, "<ram:Name>{}</ram:Name>", esc(&name));
         if !l.description.is_empty() {
-            let _ = write!(x, "<ram:Description>{}</ram:Description>", esc(&l.description));
+            let _ = write!(x, "<ram:Description>{}</ram:Description>", esc(&util::fill_placeholders(&l.description, &vars)));
         }
         x.push_str("</ram:SpecifiedTradeProduct>");
         let _ = write!(x, "<ram:SpecifiedLineTradeAgreement><ram:NetPriceProductTradePrice><ram:ChargeAmount>{}</ram:ChargeAmount></ram:NetPriceProductTradePrice></ram:SpecifiedLineTradeAgreement>", qty(price));

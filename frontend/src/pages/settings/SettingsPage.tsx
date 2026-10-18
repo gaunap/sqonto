@@ -393,7 +393,7 @@ function DocsTab({ s, patch }: { s: Settings; patch: Patch }) {
           Textvorlagen
         </Text>
         <Text size="sm" c="dimmed" mb="sm">
-          Platzhalter: {'{{Anrede}}, {{Kunde}}, {{Nummer}}, {{Datum}}, {{Betrag}}, {{Fällig am}}, {{Zahlungsziel}}, {{Gültig bis}}, {{Skonto}}, {{Firma}}, {{Referenz}}, {{Bezugsnummer}}'}
+          Platzhalter: {'{{Anrede}}, {{Kunde}}, {{Nummer}}, {{Datum}}, {{Betrag}}, {{Fällig am}}, {{Zahlungsziel}}, {{Gültig bis}}, {{Skonto}}, {{Firma}}, {{Referenz}}, {{Bezugsnummer}}, {{Leistungszeitraum}}, {{Monat}}, {{Quartal}}, {{Jahr}}'}
         </Text>
         <Tabs value={key} onChange={(v) => setKey(v ?? 'invoice')} variant="pills">
           <Tabs.List mb="md">
@@ -812,7 +812,7 @@ function EmailTab({ s, patch }: { s: Settings; patch: Patch }) {
             minRows={6}
             value={e.body}
             onChange={(ev) => set({ body: ev.currentTarget.value })}
-            description="Platzhalter: {{Dokument}}, {{Nummer}}, {{Datum}}, {{Betrag}}, {{Fällig am}}, {{Anrede}}, {{Kunde}}, {{Ansprechpartner}}, {{Firma}}"
+            description="Platzhalter: {{Dokument}}, {{Nummer}}, {{Datum}}, {{Betrag}}, {{Fällig am}}, {{Anrede}}, {{Kunde}}, {{Ansprechpartner}}, {{Firma}}, {{Leistungszeitraum}}, {{Monat}}"
             inputWrapperOrder={['label', 'input', 'description', 'error']}
           />
         </Stack>

@@ -703,6 +703,19 @@ entity! {
         pub active: bool,
         pub last_document_id: Option<i64>,
         pub created_at: String,
+        /// Finalize the created invoices right away instead of leaving drafts.
+        pub auto_finalize: bool,
+        /// Send finalized invoices by e-mail to the customer (needs SMTP).
+        pub auto_send: bool,
+        /// Price change of the item prices, e.g. 3 = +3 %; 0 = none.
+        #[ts(type = "number")]
+        pub price_change_percent: Decimal,
+        /// First period with the changed prices.
+        pub price_change_from: Option<NaiveDate>,
+        /// Apply the change again every year after `price_change_from`.
+        pub price_change_yearly: bool,
+        /// Why the last automatic finalizing or sending failed; empty after a successful run.
+        pub last_error: String,
     }
 }
 

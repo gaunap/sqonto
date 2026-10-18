@@ -429,14 +429,14 @@ pub async fn email_draft(State(st): State<AppState>, Path(id): Path<i64>) -> Api
 }
 
 /// Sends the document as PDF (plus XRechnung where that is its format) and marks it as sent.
-pub async fn send_email(State(st): State<AppState>, Path(id): Path<i64>, Json(r): Json<EmailRequest>) -> ApiResult<DocumentFull> {
+async fn send_document(st: &AppState, id: i64, r: EmailRequest) -> Result<(), AppError> {
     let (doc, s) = st.read(|c| Ok((db::get::<Document>(c, id)?, crate::services::settings::load(c)?)))?;
     if doc.status == "draft" {
         return Err(AppError::bad("Bitte das Dokument zuerst abschließen."));
     }
-    let mut attachments = vec![(pdf_name(&doc), "application/pdf".to_string(), document_pdf(&st, &doc).await?)];
+    let mut attachments = vec![(pdf_name(&doc), "application/pdf".to_string(), document_pdf(st, &doc).await?)];
     if doc.is_invoice_like() && doc.einvoice_format == "xrechnung" {
-        attachments.push((xrechnung_name(&doc), "application/xml".to_string(), xrechnung_bytes(&st, &doc)?));
+        attachments.push((xrechnung_name(&doc), "application/xml".to_string(), xrechnung_bytes(st, &doc)?));
     }
     let msg = crate::services::email::Outgoing {
         to: crate::services::email::addresses(&r.to),
@@ -447,11 +447,12 @@ pub async fn send_email(State(st): State<AppState>, Path(id): Path<i64>, Json(r)
     };
     let to = msg.to.join(", ");
     tokio::task::spawn_blocking(move || crate::services::email::send(&s.email, &msg)).await.map_err(|e| AppError::from(anyhow::anyhow!(e)))??;
-    st.write(|c| {
-        docs::mark_sent(c, id, &format!("E-Mail an {to}"))?;
-        docs::get_full(c, id)
-    })
-    .map(Json)
+    st.write(|c| docs::mark_sent(c, id, &format!("E-Mail an {to}")))
+}
+
+pub async fn send_email(State(st): State<AppState>, Path(id): Path<i64>, Json(r): Json<EmailRequest>) -> ApiResult<DocumentFull> {
+    send_document(&st, id, r).await?;
+    st.read(|c| docs::get_full(c, id)).map(Json)
 }
 
 #[derive(Deserialize)]
@@ -517,15 +518,45 @@ pub async fn recurring(State(st): State<AppState>) -> ApiResult<Vec<crate::servi
     st.read(crate::services::recurring::list).map(Json)
 }
 
-/// Saves an Abo-Rechnung; periods already due are created right away.
+/// Saves an Abo-Rechnung; periods already due are created right away (and sent in the background).
 pub async fn save_recurring(State(st): State<AppState>, id: Option<Path<i64>>, Json(mut r): Json<crate::models::RecurringInvoice>) -> ApiResult<Vec<crate::services::recurring::RecurringView>> {
     r.id = id.map(|Path(i)| i).unwrap_or(0);
-    st.write(|c| {
+    let created = st.write(|c| {
         crate::services::recurring::save(c, r)?;
-        crate::services::recurring::create_due(c, today())?;
-        crate::services::recurring::list(c)
-    })
-    .map(Json)
+        crate::services::recurring::create_due(c, today())
+    })?;
+    if created.iter().any(|c| c.finalized) {
+        let st2 = st.clone();
+        tokio::spawn(async move { deliver_recurring(&st2, created).await });
+    }
+    st.read(crate::services::recurring::list).map(Json)
+}
+
+/// Archives the invoices finalized by Abo-Rechnungen and sends those to be sent; failures are
+/// noted with the invoice and the Abo-Rechnung.
+pub async fn deliver_recurring(st: &AppState, created: Vec<crate::services::recurring::Created>) {
+    for c in created.into_iter().filter(|c| c.finalized) {
+        archive_now(st, c.document_id).await;
+        if !c.send {
+            continue;
+        }
+        let result = async {
+            let draft = st.read(|conn| email_draft_of(conn, &db::get(conn, c.document_id)?))?;
+            if draft.to.trim().is_empty() {
+                return Err(AppError::bad("Beim Kunden ist keine E-Mail-Adresse hinterlegt."));
+            }
+            send_document(st, c.document_id, EmailRequest { to: draft.to, cc: String::new(), subject: draft.subject, body: draft.body }).await
+        }
+        .await;
+        if let Err(e) = result {
+            tracing::warn!("Abo-Rechnung: Versand fehlgeschlagen: {}", e.message);
+            let _ = st.write(|conn| {
+                let number = db::get::<Document>(conn, c.document_id)?.number;
+                crate::services::settings::log(conn, "document", c.document_id, "send_failed", format!("Automatischer Versand fehlgeschlagen: {}", e.message))?;
+                crate::services::recurring::set_error(conn, c.recurring_id, &format!("Rechnung {number} wurde nicht versendet: {}", e.message))
+            });
+        }
+    }
 }
 
 pub async fn delete_recurring(State(st): State<AppState>, Path(id): Path<i64>) -> ApiResult<MessageResponse> {

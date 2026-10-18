@@ -12,6 +12,7 @@ mod reports;
 mod system;
 mod update;
 
+pub(crate) use documents::deliver_recurring;
 pub(crate) use system::auto_backup;
 
 use axum::Router;

@@ -245,6 +245,55 @@ pub fn format_iban(s: &str) -> String {
     n.as_bytes().chunks(4).map(|c| String::from_utf8_lossy(c).to_string()).collect::<Vec<_>>().join(" ")
 }
 
+/// IBAN with all but the country/check digits and the last four characters masked, as printed in
+/// a pre-notification ("DE89 XXXX XXXX XXXX XX30 00").
+pub fn mask_iban(s: &str) -> String {
+    let n = normalize_iban(s);
+    let len = n.chars().count();
+    let masked: String = n.chars().enumerate().map(|(i, c)| if i < 4 || i + 4 >= len { c } else { 'X' }).collect();
+    format_iban(&masked)
+}
+
+/// Gläubiger-Identifikationsnummer (SEPA creditor identifier): country, two check digits, a
+/// three-character business code (not part of the check) and the national identifier; the check
+/// digits are computed like an IBAN's over national identifier and country.
+pub fn creditor_id_valid(s: &str) -> bool {
+    let n = normalize_iban(s);
+    if n.len() < 8 || n.len() > 35 || !n.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return false;
+    }
+    if !n[..2].chars().all(|c| c.is_ascii_uppercase()) || !n[2..4].chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    if n.starts_with("DE") && (n.len() != 18 || !n[7..].chars().all(|c| c.is_ascii_digit())) {
+        return false;
+    }
+    let mut rem: u32 = 0;
+    for c in n[7..].chars().chain(n[..4].chars()) {
+        let d = c.to_digit(36).unwrap_or(0);
+        rem = if d < 10 { (rem * 10 + d) % 97 } else { (rem * 100 + d) % 97 };
+    }
+    rem == 1
+}
+
+/// Business day of the TARGET2 system, on which SEPA direct debits are settled: not on weekends,
+/// New Year, Good Friday, Easter Monday, 1 May and 25/26 December.
+pub fn is_target_day(d: NaiveDate) -> bool {
+    if matches!(d.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun) || matches!((d.month(), d.day()), (1, 1) | (5, 1) | (12, 25) | (12, 26)) {
+        return false;
+    }
+    let easter = easter_sunday(d.year());
+    d != easter - chrono::Duration::days(2) && d != easter + chrono::Duration::days(1)
+}
+
+/// The date itself if it is a TARGET2 business day, otherwise the next one.
+pub fn target_day_from(mut d: NaiveDate) -> NaiveDate {
+    while !is_target_day(d) {
+        d += chrono::Duration::days(1);
+    }
+    d
+}
+
 /// Easter Sunday (Gregorian calendar, anonymous algorithm).
 pub fn easter_sunday(year: i32) -> NaiveDate {
     let a = year % 19;
@@ -304,6 +353,20 @@ mod tests {
         assert_eq!(fmt_percent(dec!(19)), "19\u{a0}%");
         assert_eq!(r2(dec!(2.345)), dec!(2.35));
         assert_eq!(r2(dec!(-2.345)), dec!(-2.35));
+    }
+
+    #[test]
+    fn creditor_ids_and_target_days() {
+        assert!(creditor_id_valid("DE98ZZZ09999999999"));
+        assert!(creditor_id_valid("de98 zzz 0999 9999 999"));
+        assert!(!creditor_id_valid("DE97ZZZ09999999999"));
+        assert!(!creditor_id_valid("DE98ZZZ0999999999"));
+        assert_eq!(mask_iban("DE89 3704 0044 0532 0130 00"), "DE89 XXXX XXXX XXXX XX30 00");
+        // Good Friday and Easter Monday 2026, then a weekend.
+        assert!(!is_target_day(ymd(2026, 4, 3)) && !is_target_day(ymd(2026, 4, 6)) && is_target_day(ymd(2026, 4, 7)));
+        assert!(is_target_day(ymd(2025, 10, 3)), "German holidays are TARGET days");
+        assert_eq!(target_day_from(ymd(2026, 12, 24)), ymd(2026, 12, 24));
+        assert_eq!(target_day_from(ymd(2026, 12, 25)), ymd(2026, 12, 28));
     }
 
     #[test]

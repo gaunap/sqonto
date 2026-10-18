@@ -155,23 +155,34 @@ fn spawn_maintenance(state: AppState) {
             hourly.tick().await;
             let st = state.clone();
             // Backups read many files – keep them off the async workers.
-            let _ = tokio::task::spawn_blocking(move || {
+            let created = tokio::task::spawn_blocking(move || {
                 if let Err(e) = st.write(services::posting::ensure_current_afa) {
                     tracing::warn!("Abschreibungen des neuen Jahres: {}", e.message);
                 }
-                match st.write(|c| services::recurring::create_due(c, util::today())) {
-                    Ok(ids) if !ids.is_empty() => tracing::info!("{} Rechnungsentwürfe aus Abo-Rechnungen erstellt", ids.len()),
-                    Ok(_) => {}
-                    Err(e) => tracing::warn!("Abo-Rechnungen: {}", e.message),
-                }
+                let created = match st.write(|c| services::recurring::create_due(c, util::today())) {
+                    Ok(created) => {
+                        if !created.is_empty() {
+                            tracing::info!("{} Rechnungen aus Abo-Rechnungen erstellt", created.len());
+                        }
+                        created
+                    }
+                    Err(e) => {
+                        tracing::warn!("Abo-Rechnungen: {}", e.message);
+                        Vec::new()
+                    }
+                };
                 services::update::cleanup(&st.updates_dir());
                 match api::auto_backup(&st, false) {
                     Ok(Some(path)) => tracing::info!("Automatische Sicherung: {}", path.display()),
                     Ok(None) => {}
                     Err(e) => tracing::warn!("Automatische Sicherung fehlgeschlagen: {}", e.message),
                 }
+                created
             })
-            .await;
+            .await
+            .unwrap_or_default();
+            // Finalized Abo-Rechnungen are archived and sent (rendering and SMTP are async).
+            api::deliver_recurring(&state, created).await;
         }
     });
 }
