@@ -52,6 +52,17 @@ pub fn default_texts() -> BTreeMap<String, DocTexts> {
             ),
         ),
     );
+    // Invoices collected by SEPA-Lastschrift: the closing text is the pre-notification.
+    m.insert(
+        "invoice_debit".into(),
+        t(
+            "Rechnung",
+            "{{Anrede}}\n\nvielen Dank für Ihren Auftrag und das damit verbundene Vertrauen. Wir erlauben uns, Ihnen folgende Leistungen in Rechnung zu stellen:",
+            &format!(
+                "Den Rechnungsbetrag von {{{{Betrag}}}} ziehen wir am {{{{Fällig am}}}} per SEPA-Lastschrift von Ihrem Konto {{{{Kunden-IBAN}}}} ein (Mandatsreferenz {{{{Mandatsreferenz}}}}, Gläubiger-ID {{{{Gläubiger-ID}}}}). Bitte sorgen Sie für ausreichende Deckung.\n\n{GRUSS}"
+            ),
+        ),
+    );
     m.insert(
         "partial".into(),
         t(

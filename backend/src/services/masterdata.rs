@@ -180,13 +180,17 @@ pub struct ContactDefaults {
     pub payment_terms_days: Option<i64>,
     pub einvoice_format: String,
     pub persons: Vec<String>,
+    /// "" | debit – direct debit if the customer has a usable mandate.
+    pub payment_method: String,
+    pub mandate_id: Option<i64>,
 }
 
 pub fn contact_defaults(conn: &Connection, id: i64, doc_type: &str) -> Result<ContactDefaults> {
     let s = cfg::load(conn)?;
     let c: Contact = db::get(conn, id)?;
-    let mut doc = Document { doc_type: doc_type.into(), date: today(), ..Default::default() };
+    let mut doc = Document { doc_type: doc_type.into(), kind: "standard".into(), date: today(), ..Default::default() };
     documents::apply_contact(&s, &mut doc, &c);
+    crate::services::debit::apply_default(conn, &s, &mut doc)?;
     let persons = c
         .persons
         .iter()
@@ -200,6 +204,8 @@ pub fn contact_defaults(conn: &Connection, id: i64, doc_type: &str) -> Result<Co
         payment_terms_days: c.payment_terms_days,
         einvoice_format: if c.einvoice_format.is_empty() { s.docs.einvoice_default.clone() } else { c.einvoice_format.clone() },
         persons,
+        payment_method: doc.payment_method,
+        mandate_id: doc.mandate_id,
     })
 }
 

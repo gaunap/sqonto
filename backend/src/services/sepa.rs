@@ -22,8 +22,8 @@ use crate::services::settings as cfg;
 use crate::util::{bic_valid, fmt_date, fmt_money, iban_valid, normalize_iban, now_str, today};
 
 /// SEPA countries outside the EEA: the payee's address is mandatory there (EPC rulebook).
-const NON_EEA_SEPA: &[&str] = &["AD", "AL", "CH", "GB", "GG", "GI", "IM", "JE", "MC", "MD", "ME", "MK", "RS", "SM", "VA"];
-const EEA: &[&str] = &[
+pub(crate) const NON_EEA_SEPA: &[&str] = &["AD", "AL", "CH", "GB", "GG", "GI", "IM", "JE", "MC", "MD", "ME", "MK", "RS", "SM", "VA"];
+pub(crate) const EEA: &[&str] = &[
     "AT", "BE", "BG", "CY", "CZ", "DE", "DK", "EE", "ES", "FI", "FR", "GR", "HR", "HU", "IE", "IS", "IT", "LI", "LT", "LU", "LV", "MT", "NL", "NO", "PL", "PT", "RO", "SE", "SI", "SK",
 ];
 
@@ -130,19 +130,19 @@ pub fn sepa_text(s: &str, max: usize) -> String {
 }
 
 /// Identifier (MsgId, EndToEndId): SEPA characters without blanks, at most 35.
-fn sepa_id(s: &str) -> String {
+pub(crate) fn sepa_id(s: &str) -> String {
     sepa_text(s, 70).replace(' ', "").chars().take(35).collect()
 }
 
-fn xml_escape(s: &str) -> String {
+pub(crate) fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('\'', "&apos;").replace('"', "&quot;")
 }
 
-fn amount(d: Decimal) -> String {
+pub(crate) fn amount(d: Decimal) -> String {
     format!("{:.2}", d.round_dp(2))
 }
 
-fn country(iban: &str) -> &str {
+pub(crate) fn country(iban: &str) -> &str {
     iban.get(..2).unwrap_or("")
 }
 

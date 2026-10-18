@@ -23,4 +23,12 @@ status: string, number: string, contact_id: number | null, address: string, cont
 /**
  * standard | small_business | reverse_charge | eu_service | eu_delivery | export | third_country
  */
-tax_mode: string, prices_gross: boolean, cash_discount_percent: number, cash_discount_days: number, layout_id: number | null, currency: string, net_total: number, tax_total: number, gross_total: number, paid_total: number, source_id: number | null, base_id: number | null, partial_mode: string, partial_value: number, cancels_id: number | null, einvoice_format: string, dunning_level: number, finalized_at: string, sent_at: string, paid_at: string | null, notes: string, created_at: string, updated_at: string, };
+tax_mode: string, prices_gross: boolean, cash_discount_percent: number, cash_discount_days: number, layout_id: number | null, currency: string, net_total: number, tax_total: number, gross_total: number, paid_total: number, source_id: number | null, base_id: number | null, partial_mode: string, partial_value: number, cancels_id: number | null, einvoice_format: string, dunning_level: number, finalized_at: string, sent_at: string, paid_at: string | null, notes: string, created_at: string, updated_at: string, 
+/**
+ * "" (transfer) | debit (SEPA-Lastschrift)
+ */
+payment_method: string, 
+/**
+ * Lastschriftmandat used to collect the invoice.
+ */
+mandate_id: number | null, };

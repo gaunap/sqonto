@@ -20,4 +20,9 @@ kind: string,
 /**
  * Payment service provider of the report (paypal, stripe, sumup, psp); empty for bank data.
  */
-provider: string, };
+provider: string, 
+/**
+ * End-to-end reference and return reason (CAMT); appended to the purpose when imported, but
+ * not part of the hash, so that files imported before are still recognised.
+ */
+reference: string, };

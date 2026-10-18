@@ -62,13 +62,13 @@ import {
 } from '@tabler/icons-react';
 import { api, downloadFile, openFile } from '@/api/client';
 import { notifyError, useAction, useApi, useSettings } from '@/api/hooks';
-import type { DocumentFull, EinvoiceCheck, EmailDraft, EmailRequest, IdResponse, Pages, RecurringView } from '@/api/types';
+import type { DocumentFull, EinvoiceCheck, EmailDraft, EmailRequest, IdResponse, MandateView, Pages, RecurringView } from '@/api/types';
 import { PaymentModal } from '@/components/PaymentModal';
 import { PagesPreview } from '@/components/DocumentParts';
 import { CYCLES, RecurringError, RecurringModal, recurringMode } from '@/components/Recurring';
 import { InfoRow, Money, Page, PageHeader, SectionCard, StatusBadge, confirmAction } from '@/components/ui';
 import { documentIncoming, documentRemaining } from '@/lib/calc';
-import { date, dateTime, money, relativeDays } from '@/lib/format';
+import { date, dateTime, formatIban, money, relativeDays } from '@/lib/format';
 import { isDesktop } from '@/lib/desktop';
 import { DOC_TYPES, docLabel, type DocType } from '@/lib/labels';
 
@@ -319,6 +319,8 @@ export function DocumentViewPage() {
   const { data: settings } = useSettings();
   const { data: recurringList } = useApi<RecurringView[]>('/recurring');
   const recurring = recurringList?.find((r) => r.recurring.template_id === Number(id))?.recurring ?? null;
+  const { data: mandates } = useApi<MandateView[]>(data?.doc.payment_method === 'debit' ? '/mandates' : null, { contact_id: data?.doc.contact_id ?? undefined });
+  const mandate = mandates?.find((m) => m.mandate.id === data?.doc.mandate_id);
 
   useEffect(() => {
     if (data && data.doc.status === 'draft') navigate(`/dokumente/${data.doc.id}/bearbeiten`, { replace: true });
@@ -641,7 +643,14 @@ export function DocumentViewPage() {
               <InfoRow label="Datum">{date(doc.date)}</InfoRow>
               {doc.service_date && <InfoRow label={doc.service_date_end ? 'Leistungszeitraum' : 'Leistungsdatum'}>{doc.service_date_end ? `${date(doc.service_date)} – ${date(doc.service_date_end)}` : date(doc.service_date)}</InfoRow>}
               {doc.valid_until && <InfoRow label="Gültig bis">{date(doc.valid_until)}</InfoRow>}
-              {doc.due_date && <InfoRow label="Fällig am">{date(doc.due_date)}</InfoRow>}
+              {doc.due_date && <InfoRow label={doc.payment_method === 'debit' ? 'Einzug am' : 'Fällig am'}>{date(doc.due_date)}</InfoRow>}
+              {doc.payment_method === 'debit' && (
+                <InfoRow label="Zahlungsart">
+                  <Tooltip label={mandate ? `${formatIban(mandate.mandate.iban)} · ${mandate.status_label}` : ''} disabled={!mandate}>
+                    <span>SEPA-Lastschrift{mandate ? ` · ${mandate.mandate.reference}` : ''}</span>
+                  </Tooltip>
+                </InfoRow>
+              )}
               {doc.reference && <InfoRow label="Referenz">{doc.reference}</InfoRow>}
               {doc.buyer_reference && <InfoRow label="Leitweg-ID">{doc.buyer_reference}</InfoRow>}
               <Divider my="xs" />

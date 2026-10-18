@@ -762,6 +762,9 @@ pub fn suggestions(conn: &Connection, tx_id: i64) -> Result<Vec<MatchSuggestion>
             }
         }
     }
+    if tx.amount < Decimal::ZERO && allocated.is_zero() {
+        out.extend(crate::services::debit::return_suggestions(conn, &tx)?);
+    }
     out.sort_by(|a, b| b.score.cmp(&a.score).then(b.date.cmp(&a.date)));
     out.truncate(12);
     Ok(out)

@@ -12,6 +12,7 @@ import type { ContactOverview } from '@/api/types';
 import { ContactDrawer } from '@/components/ContactDrawer';
 import { displayName } from '@/components/inputs';
 import { ListTable } from '@/components/ListTable';
+import { MandatesCard } from '@/components/Mandates';
 import { InfoRow, KpiCard, Page, PageHeader, SectionCard, StatusBadge, confirmAction } from '@/components/ui';
 import { date, formatIban, money } from '@/lib/format';
 import { countryName, docLabel, EINVOICE_FORMATS, TAX_MODES } from '@/lib/labels';
@@ -186,6 +187,7 @@ export function ContactDetailPage() {
                 </Text>
               )}
             </SectionCard>
+            {c.is_customer && <MandatesCard contact={c} />}
           </Stack>
         </Grid.Col>
         <Grid.Col span={{ base: 12, lg: 8 }}>

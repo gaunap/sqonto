@@ -9,7 +9,8 @@ Projektwebsite: [sqonto.de](https://sqonto.de).
 
 - **Verkauf:** Angebote, Auftragsbestätigungen, Lieferscheine, Rechnungen, Abschlags- und
   Schlussrechnungen, Gutschriften und Stornorechnungen – inklusive Umwandlung entlang des
-  Vorgangs (Angebot → Auftrag → Lieferschein/Rechnung).
+  Vorgangs (Angebot → Auftrag → Lieferschein/Rechnung). Abo-Rechnungen mit automatischem
+  Abschluss und E-Mail-Versand, Preisanpassungen und Platzhaltern für den Leistungszeitraum.
 - **E-Rechnungen:** Erzeugen von ZUGFeRD (PDF/A-3 mit eingebettetem XML) und XRechnung 3.0
   (CII, EN 16931), Einlesen von ZUGFeRD/XRechnung bei der Belegerfassung.
 - **Layouts:** Layout-Designer mit frei positionierbaren Elementen, Logo, Briefpapier (PDF/Bild),
@@ -20,8 +21,9 @@ Projektwebsite: [sqonto.de](https://sqonto.de).
   Lieferanten automatisch aus E-Rechnungen anlegen.
 - **Bank & Kasse:** CSV- und CAMT-Import mit automatischer Zuordnung, Import der Berichte von
   PayPal, Stripe und SumUp (Gebühren und Auszahlungen werden gebucht), Zahlungen, Skonto,
-  Ausbuchungen, SEPA-Überweisungsdateien (pain.001) für offene Belege, GoBD-konformes Kassenbuch
-  mit Stornobuchungen.
+  Ausbuchungen, SEPA-Überweisungsdateien (pain.001) für offene Belege, SEPA-Lastschriften
+  (pain.008) mit Mandatsverwaltung, Vorabankündigung und Erkennung von Rücklastschriften,
+  GoBD-konformes Kassenbuch mit Stornobuchungen.
 - **Buchhaltung:** Einnahmen-Überschuss-Rechnung (Ist-Versteuerung) oder doppelte Buchführung
   (Bilanzierung, Soll-Versteuerung), SKR03/SKR04, Buchungsjournal, Kontenblätter, manuelle
   Buchungen, Anlagenverzeichnis mit AfA (linear, GWG, Sammelposten), Festschreibung.

@@ -19,6 +19,7 @@ use crate::services::bankimport::{self, CsvMapping, ImportPreview, ImportSummary
 use crate::services::einvoice::{self, ImportResult};
 use crate::services::finance::{self as fin, CashEntryInput, Cashbook, MatchSuggestion, PaymentAccountView, PaymentRequest, TransactionFilter, TransactionInput, TransactionView};
 use crate::services::receipts::{self as rec, ReceiptFilter, ReceiptFull, ReceiptInput, ReceiptListItem};
+use crate::services::debit::{self, DebitCandidate, DebitRunRequest, DebitRunView, MandateView};
 use crate::services::sepa::{self, PaymentRunRequest, PaymentRunView, TransferCandidate};
 use crate::state::AppState;
 use crate::util::{fmt_date, fmt_money, today, ymd};
@@ -367,4 +368,64 @@ pub async fn payment_run_file(State(st): State<AppState>, Path(id): Path<i64>) -
 
 pub async fn delete_payment_run(State(st): State<AppState>, Path(id): Path<i64>) -> ApiResult<MessageResponse> {
     st.write(|c| sepa::delete(c, id)).map(|_| Json(MessageResponse { message: "Überweisungsdatei verworfen".into() }))
+}
+
+// ---------------------------------------------------------------- SEPA-Lastschriften
+
+#[derive(Deserialize)]
+pub struct MandateQ {
+    contact_id: Option<i64>,
+}
+
+pub async fn mandates(State(st): State<AppState>, Query(q): Query<MandateQ>) -> ApiResult<Vec<MandateView>> {
+    st.read(|c| debit::mandates(c, q.contact_id)).map(Json)
+}
+
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct ReferenceSuggestion {
+    pub reference: String,
+}
+
+pub async fn mandate_reference(State(st): State<AppState>, Query(q): Query<MandateQ>) -> ApiResult<ReferenceSuggestion> {
+    st.read(|c| debit::suggest_reference(c, q.contact_id.unwrap_or_default())).map(|reference| Json(ReferenceSuggestion { reference }))
+}
+
+pub async fn save_mandate(State(st): State<AppState>, id: Option<Path<i64>>, Json(mut m): Json<crate::models::Mandate>) -> ApiResult<MandateView> {
+    m.id = id.map(|Path(i)| i).unwrap_or(0);
+    st.write(|c| debit::save_mandate(c, m)).map(Json)
+}
+
+pub async fn delete_mandate(State(st): State<AppState>, Path(id): Path<i64>) -> ApiResult<MessageResponse> {
+    st.write(|c| debit::delete_mandate(c, id)).map(|_| Json(MessageResponse { message: "Mandat gelöscht".into() }))
+}
+
+pub async fn mandate_pdf(State(st): State<AppState>, Path(id): Path<i64>) -> Result<Response, AppError> {
+    let (job, name) = st.read(|c| {
+        let m: crate::models::Mandate = db::get(c, id)?;
+        Ok((data::mandate_job(c, &st.data_dir, &m)?, super::safe_filename(&format!("SEPA-Mandat_{}.pdf", m.reference))))
+    })?;
+    let bytes = render_pdf(&st, job, false).await?;
+    Ok(file_response(bytes, "application/pdf", &name, false))
+}
+
+pub async fn debit_candidates(State(st): State<AppState>) -> ApiResult<Vec<DebitCandidate>> {
+    st.read(debit::candidates).map(Json)
+}
+
+pub async fn debit_runs(State(st): State<AppState>) -> ApiResult<Vec<DebitRunView>> {
+    st.read(debit::list).map(Json)
+}
+
+pub async fn create_debit_run(State(st): State<AppState>, Json(req): Json<DebitRunRequest>) -> ApiResult<DebitRunView> {
+    st.write(|c| debit::create(c, req)).map(Json)
+}
+
+pub async fn debit_run_file(State(st): State<AppState>, Path(id): Path<i64>) -> Result<Response, AppError> {
+    let (name, xml) = st.read(|c| debit::file(c, id))?;
+    Ok(file_response(xml.into_bytes(), "application/xml; charset=utf-8", &name, true))
+}
+
+pub async fn delete_debit_run(State(st): State<AppState>, Path(id): Path<i64>) -> ApiResult<MessageResponse> {
+    st.write(|c| debit::delete(c, id)).map(|_| Json(MessageResponse { message: "Lastschriftdatei verworfen".into() }))
 }

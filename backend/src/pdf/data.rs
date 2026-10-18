@@ -255,7 +255,8 @@ pub fn document_job(
     };
     let number = if doc.number.is_empty() { "Entwurf".to_string() } else { doc.number.clone() };
     // Placeholders also work in the title and the positions (e.g. "Wartung {{Monat}}").
-    let vars = documents::placeholders(&s, doc, contact.as_ref());
+    let mut vars = documents::placeholders(&s, doc, contact.as_ref());
+    vars.extend(crate::services::debit::placeholders(conn, &s, doc)?);
     let fill = |t: &str| util::fill_placeholders(t, &vars);
     let title = fill(&doc.title);
     let mut info: Vec<(String, String)> = vec![(number_label.into(), number.clone()), ("Datum".into(), fmt_date(doc.date))];
@@ -272,7 +273,7 @@ pub fn document_job(
         info.push(("Gültig bis".into(), fmt_date_opt(doc.valid_until)));
     }
     if doc.is_invoice_like() && doc.kind != "cancellation" && doc.due_date.is_some() {
-        info.push(("Fällig am".into(), fmt_date_opt(doc.due_date)));
+        info.push((if doc.payment_method == "debit" { "Einzug am".into() } else { "Fällig am".into() }, fmt_date_opt(doc.due_date)));
     }
     if !doc.reference.is_empty() {
         info.push(("Ihre Referenz".into(), doc.reference.clone()));
@@ -356,6 +357,9 @@ pub fn document_job(
     let intro = util::fill_placeholders(&doc.intro_text, &vars);
     let closing = util::fill_placeholders(&doc.closing_text, &vars);
     let mut notes = tax_note(doc, contact.as_ref(), &s);
+    if let Some(p) = crate::services::debit::prenotification(conn, &s, doc, &closing)? {
+        notes.push(p);
+    }
     if doc.is_invoice_like() && doc.cash_discount_percent > Decimal::ZERO && doc.cash_discount_days > 0 && doc.kind != "cancellation" {
         if let Some((_, sk)) = vars.iter().find(|(k, _)| *k == "Skonto")
             && !sk.is_empty()
@@ -371,6 +375,7 @@ pub fn document_job(
     if layout.show_girocode
         && doc.doc_type == "invoice"
         && doc.kind != "cancellation"
+        && doc.payment_method != "debit"
         && giro_amount > Decimal::ZERO
         && !s.company.iban.is_empty()
         && let Some(payload) = girocode::payload(&s.company.name, &s.company.iban, &s.company.bic, giro_amount, &number)
@@ -534,6 +539,77 @@ pub fn dunning_job(conn: &Connection, data_dir: &Path, dn: &Dunning) -> Result<R
                 "columns": ["Rechnung", "Datum", "Fällig am", "Betrag", "Bezahlt", "Offen"],
                 "align": ["left", "left", "left", "right", "right", "right"],
                 "rows": table_rows,
+            },
+        }
+    });
+    let mut job = RenderJob::new(super::DOCUMENT_TEMPLATE, data);
+    job.files.extend(files);
+    Ok(job)
+}
+
+/// Form of a SEPA-Lastschriftmandat for the customer to sign, with the texts prescribed by the
+/// SEPA rulebook for Basis- and Firmenlastschrift.
+pub fn mandate_job(conn: &Connection, data_dir: &Path, m: &Mandate) -> Result<RenderJob> {
+    let s = cfg::load(conn)?;
+    let contact: Contact = db::get(conn, m.contact_id)?;
+    let layout = layout_for(conn, &s, None)?;
+    let mut files = HashMap::new();
+    let layout_v = layout_json(&layout, &mut files, conn, data_dir, &s)?;
+    let c = &s.company;
+    let b2b = m.scheme == "B2B";
+    let title = if b2b { "SEPA-Firmenlastschrift-Mandat" } else { "SEPA-Lastschriftmandat" };
+    let mut text = format!(
+        "Ich ermächtige / Wir ermächtigen {name}, Zahlungen von meinem / unserem Konto mittels Lastschrift einzuziehen. Zugleich weise ich mein / weisen wir unser Kreditinstitut an, die von {name} auf mein / unser Konto gezogenen Lastschriften einzulösen.\n\n",
+        name = c.name
+    );
+    text.push_str(if b2b {
+        "Hinweis: Dieses Lastschriftmandat dient nur dem Einzug von Lastschriften, die auf Konten von Unternehmen gezogen sind. Ich bin / Wir sind nicht berechtigt, nach der erfolgten Einlösung eine Erstattung des belasteten Betrages zu verlangen. Ich bin / Wir sind berechtigt, mein / unser Kreditinstitut bis zum Fälligkeitstag anzuweisen, Lastschriften nicht einzulösen."
+    } else {
+        "Hinweis: Ich kann / Wir können innerhalb von acht Wochen, beginnend mit dem Belastungsdatum, die Erstattung des belasteten Betrages verlangen. Es gelten dabei die mit meinem / unserem Kreditinstitut vereinbarten Bedingungen."
+    });
+    let days = s.debit.prenotification_days;
+    if (1..14).contains(&days) {
+        text.push_str(&format!("\n\nDie Frist für die Vorabankündigung (Pre-Notification) der Lastschriften wird auf {days} {} verkürzt.", if days == 1 { "Tag" } else { "Tage" }));
+    }
+    let creditor = [c.name.as_str(), c.street.as_str(), format!("{} {}", c.zip, c.city).trim()].iter().filter(|x| !x.trim().is_empty()).cloned().collect::<Vec<_>>().join(", ");
+    let rows = vec![
+        vec!["Zahlungsempfänger".to_string(), creditor],
+        vec!["Gläubiger-Identifikationsnummer".into(), util::normalize_iban(&s.debit.creditor_id)],
+        vec!["Mandatsreferenz".into(), m.reference.clone()],
+        vec!["Zahlungsart".into(), if m.recurring { "Wiederkehrende Zahlung".into() } else { "Einmalige Zahlung".into() }],
+        vec!["Kontoinhaber".into(), if m.account_holder.is_empty() { contact.display_name() } else { m.account_holder.clone() }],
+        vec!["IBAN".into(), util::format_iban(&m.iban)],
+        vec!["BIC".into(), if m.bic.is_empty() { "–".into() } else { m.bic.clone() }],
+    ];
+    let mut info: Vec<(String, String)> = vec![("Mandatsreferenz".into(), m.reference.clone())];
+    if !contact.number.is_empty() {
+        info.push(("Kundennr.".into(), contact.number.clone()));
+    }
+    let data = json!({
+        "layout": layout_v,
+        "company": company_json(&s, &layout),
+        "doc": {
+            "kind": "mandate",
+            "label": title,
+            "title": title,
+            "heading": title,
+            "number": m.reference,
+            "is_draft": false,
+            "recipient": contact.address_block(None, &c.country).lines().collect::<Vec<_>>(),
+            "info": info,
+            "intro": text,
+            "closing": "\n\n\n_______________________________________\nOrt, Datum\n\n\n\n_______________________________________\nUnterschrift(en) des Kontoinhabers",
+            "columns": { "pos": false, "number": false, "unit": false, "discount": false, "tax": false, "prices": false },
+            "price_label": "",
+            "total_label": "",
+            "rows": [],
+            "totals": [],
+            "notes": ["Bitte unterschrieben zurücksenden. Das Mandat gilt, bis es widerrufen wird; es erlischt, wenn 36 Monate lang keine Lastschrift eingezogen wird."],
+            "girocode": Value::Null,
+            "custom_table": {
+                "columns": ["", ""],
+                "align": ["left", "left"],
+                "rows": rows,
             },
         }
     });

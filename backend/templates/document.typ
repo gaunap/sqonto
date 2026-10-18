@@ -245,13 +245,15 @@
 // Custom table (e.g. dunning letters)
 #if D.custom_table != none {
   let ct = D.custom_table
+  // Without column titles (e.g. the fields of a mandate form) there is no header row.
+  let headed = ct.columns.any(c => c != "")
   table(
     columns: ct.columns.enumerate().map(((i, _)) => if i == 0 { 1fr } else { auto }),
     align: (x, y) => (if ct.align.at(x) == "right" { right } else { left }) + top,
     inset: (x: 4.5pt, y: 5.5pt),
-    stroke: (x, y) => if y == 0 { (bottom: 0.8pt + accent) } else { (bottom: 0.4pt + hair) },
-    fill: (x, y) => if y == 0 { header-fill } else { none },
-    table.header(..ct.columns.map(c => text(weight: "bold", size: 0.9em, fill: header-color, c))),
+    stroke: (x, y) => if headed and y == 0 { (bottom: 0.8pt + accent) } else { (bottom: 0.4pt + hair) },
+    fill: (x, y) => if headed and y == 0 { header-fill } else { none },
+    ..if headed { (table.header(..ct.columns.map(c => text(weight: "bold", size: 0.9em, fill: header-color, c))),) } else { () },
     ..ct.rows.flatten(),
   )
 }

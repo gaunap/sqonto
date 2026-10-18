@@ -347,6 +347,33 @@ pub fn load(conn: &Connection) -> Result<()> {
     let ls_id = documents::convert(conn, ab.id, "delivery")?;
     documents::finalize_demo(conn, ls_id)?;
 
+    // SEPA-Lastschrift: a maintenance contract collected monthly as Abo-Rechnung.
+    let mut s = cfg::load(conn)?;
+    if s.debit.creditor_id.is_empty() {
+        // Example Gläubiger-ID of the Deutsche Bundesbank.
+        s.debit.creditor_id = "DE98ZZZ09999999999".into();
+        cfg::save(conn, &s)?;
+    }
+    let albers = &customers[9];
+    crate::services::debit::save_mandate(
+        conn,
+        Mandate {
+            contact_id: albers.id,
+            reference: crate::services::debit::suggest_reference(conn, albers.id)?,
+            signed_on: today() - Duration::days(40),
+            scheme: "CORE".into(),
+            recurring: true,
+            iban: "DE02120300000000202051".into(),
+            ..Default::default()
+        },
+    )?;
+    let care = DocumentLine { line_type: "item".into(), name: "Website-Wartung und Hosting {{Monat}}".into(), quantity: dec!(1), unit: "Monat".into(), unit_price: dec!(89), tax_rate: dec!(19), ..Default::default() };
+    let contract = make_doc(conn, "invoice", albers, today() - Duration::days(2), vec![care], true)?;
+    crate::services::recurring::save(
+        conn,
+        RecurringInvoice { template_id: contract.id, cycle: "monthly".into(), next_date: crate::util::add_months(contract.date, 1), auto_finalize: true, active: true, ..Default::default() },
+    )?;
+
     // ---------------------------------------------------------------- Belege
     let rl = |account: String, desc: &str, gross: Decimal, rate: i64| ReceiptLine {
         account,

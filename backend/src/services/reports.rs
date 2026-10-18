@@ -1354,6 +1354,13 @@ pub fn dashboard(conn: &Connection) -> Result<Dashboard> {
     if unbooked > 0 {
         todos.push(Todo { kind: "transactions".into(), label: plural(unbooked, "nicht zugeordnete Kontobewegung", "nicht zugeordnete Kontobewegungen"), count: unbooked, link: "/bank".into(), severity: "blue".into() });
     }
+    let (debits_due, debits_returned) = crate::services::debit::due_count(conn)?;
+    if debits_returned > 0 {
+        todos.push(Todo { kind: "debit_returned".into(), label: plural(debits_returned, "Rücklastschrift", "Rücklastschriften"), count: debits_returned, link: "/offene-posten?tab=lastschriften".into(), severity: "red".into() });
+    }
+    if debits_due > 0 {
+        todos.push(Todo { kind: "debits".into(), label: plural(debits_due, "Lastschrift einzuziehen", "Lastschriften einzuziehen"), count: debits_due, link: "/offene-posten?tab=lastschriften".into(), severity: "blue".into() });
+    }
     if drafts > 0 {
         todos.push(Todo { kind: "drafts".into(), label: plural(drafts, "Rechnungsentwurf", "Rechnungsentwürfe"), count: drafts, link: "/rechnungen?status=draft".into(), severity: "gray".into() });
     }

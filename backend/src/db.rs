@@ -32,6 +32,9 @@ const MIGRATIONS: &[&str] = &[
      ALTER TABLE recurring_invoices ADD COLUMN price_change_from TEXT;
      ALTER TABLE recurring_invoices ADD COLUMN price_change_yearly INTEGER NOT NULL DEFAULT 0;
      ALTER TABLE recurring_invoices ADD COLUMN last_error TEXT NOT NULL DEFAULT '';",
+    // 2 → 3: SEPA-Lastschrift as payment method of invoices
+    "ALTER TABLE documents ADD COLUMN payment_method TEXT NOT NULL DEFAULT '';
+     ALTER TABLE documents ADD COLUMN mandate_id INTEGER;",
 ];
 
 pub const SCHEMA_VERSION: i64 = 1 + MIGRATIONS.len() as i64;

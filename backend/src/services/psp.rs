@@ -129,6 +129,7 @@ fn tx(date: NaiveDate, amount: Decimal, counterparty: String, purpose: String, a
         account,
         kind: kind.into(),
         provider: provider.into(),
+        reference: String::new(),
     }
 }
 

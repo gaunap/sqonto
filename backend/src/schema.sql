@@ -153,7 +153,9 @@ CREATE TABLE IF NOT EXISTS documents (
   paid_at               TEXT,
   notes                 TEXT NOT NULL DEFAULT '',
   created_at            TEXT NOT NULL DEFAULT '',
-  updated_at            TEXT NOT NULL DEFAULT ''
+  updated_at            TEXT NOT NULL DEFAULT '',
+  payment_method        TEXT NOT NULL DEFAULT '',
+  mandate_id            INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_documents_type ON documents(doc_type, status);
 CREATE INDEX IF NOT EXISTS idx_documents_contact ON documents(contact_id);
@@ -426,6 +428,52 @@ CREATE TABLE IF NOT EXISTS payment_run_items (
   end_to_end_id TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_payment_run_items_receipt ON payment_run_items(receipt_id);
+
+-- SEPA-Lastschriften: mandates of customers and pain.008 files for open invoices
+CREATE TABLE IF NOT EXISTS mandates (
+  id             INTEGER PRIMARY KEY,
+  contact_id     INTEGER NOT NULL REFERENCES contacts(id),
+  reference      TEXT NOT NULL UNIQUE,
+  signed_on      TEXT NOT NULL,
+  scheme         TEXT NOT NULL DEFAULT 'CORE',
+  recurring      INTEGER NOT NULL DEFAULT 1,
+  account_holder TEXT NOT NULL DEFAULT '',
+  iban           TEXT NOT NULL DEFAULT '',
+  bic            TEXT NOT NULL DEFAULT '',
+  revoked_on     TEXT,
+  notes          TEXT NOT NULL DEFAULT '',
+  created_at     TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_mandates_contact ON mandates(contact_id);
+
+CREATE TABLE IF NOT EXISTS debit_runs (
+  id         INTEGER PRIMARY KEY,
+  account_id INTEGER NOT NULL REFERENCES payment_accounts(id),
+  message_id TEXT NOT NULL DEFAULT '',
+  total      TEXT NOT NULL DEFAULT '0',
+  count      INTEGER NOT NULL DEFAULT 0,
+  xml        TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS debit_run_items (
+  id                INTEGER PRIMARY KEY,
+  run_id            INTEGER NOT NULL REFERENCES debit_runs(id) ON DELETE CASCADE,
+  document_id       INTEGER NOT NULL REFERENCES documents(id),
+  mandate_id        INTEGER NOT NULL REFERENCES mandates(id),
+  amount            TEXT NOT NULL DEFAULT '0',
+  collection_date   TEXT NOT NULL,
+  sequence          TEXT NOT NULL DEFAULT 'RCUR',
+  scheme            TEXT NOT NULL DEFAULT 'CORE',
+  debtor_name       TEXT NOT NULL DEFAULT '',
+  debtor_iban       TEXT NOT NULL DEFAULT '',
+  debtor_bic        TEXT NOT NULL DEFAULT '',
+  mandate_reference TEXT NOT NULL DEFAULT '',
+  mandate_signed_on TEXT NOT NULL,
+  remittance        TEXT NOT NULL DEFAULT '',
+  end_to_end_id     TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_debit_run_items_document ON debit_run_items(document_id);
 
 CREATE TABLE IF NOT EXISTS zm_filings (
   id           INTEGER PRIMARY KEY,

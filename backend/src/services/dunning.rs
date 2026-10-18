@@ -70,8 +70,10 @@ pub fn suggestions_all(conn: &Connection) -> Result<Vec<DunningSuggestion>> {
     let s = cfg::load(conn)?;
     let t = today();
     let docs = documents::list(conn, &DocumentFilter { doc_type: "invoice".into(), status: "overdue".into(), ..Default::default() })?;
+    // Invoices collected by direct debit are only dunned after a Rücklastschrift.
+    let debit = crate::services::debit::not_dunnable(conn)?;
     let mut out = Vec::new();
-    for d in docs {
+    for d in docs.into_iter().filter(|d| !debit.contains(&d.id)) {
         let last = db::query_one::<Dunning>(conn, "WHERE document_id = ?1 ORDER BY level DESC, id DESC", &[v(d.id)])?;
         let next_level = match &last {
             Some(l) => l.level + 1,

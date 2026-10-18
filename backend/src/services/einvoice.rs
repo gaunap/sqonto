@@ -87,7 +87,9 @@ pub fn check(conn: &Connection, doc: &Document, xrechnung: bool) -> Result<Einvo
     if c.vat_id.is_empty() && c.tax_number.is_empty() {
         errors.push("USt-IdNr. oder Steuernummer des Unternehmens fehlt.".into());
     }
-    if c.iban.is_empty() && doc.doc_type == "invoice" {
+    if doc.payment_method == "debit" {
+        errors.extend(crate::services::debit::document_problems(conn, &s, doc)?.into_iter().filter(|p| !p.starts_with("Mandat ")).map(|p| format!("SEPA-Lastschrift: {p}.")));
+    } else if c.iban.is_empty() && doc.doc_type == "invoice" {
         warnings.push("Keine IBAN hinterlegt – es wird keine Zahlungsanweisung übermittelt.".into());
     }
     match &contact {
@@ -300,12 +302,25 @@ pub fn generate_cii(conn: &Connection, doc: &Document, guideline: &str) -> Resul
     x.push_str("</ram:ApplicableHeaderTradeDelivery>");
 
     // Settlement
+    let mandate = match doc.mandate_id.filter(|_| doc.payment_method == "debit" && doc.doc_type == "invoice" && doc.kind != "cancellation") {
+        Some(id) => db::find::<Mandate>(conn, id)?,
+        None => None,
+    };
     x.push_str("<ram:ApplicableHeaderTradeSettlement>");
+    if mandate.is_some() {
+        // BT-90: Gläubiger-ID
+        let _ = write!(x, "<ram:CreditorReferenceID>{}</ram:CreditorReferenceID>", esc(&util::normalize_iban(&s.debit.creditor_id)));
+    }
     if doc.doc_type == "invoice" && doc.kind != "cancellation" {
         let _ = write!(x, "<ram:PaymentReference>{}</ram:PaymentReference>", esc(&doc.number));
     }
     let _ = write!(x, "<ram:InvoiceCurrencyCode>{}</ram:InvoiceCurrencyCode>", esc(&doc.currency));
-    if !c.iban.is_empty() && doc.doc_type == "invoice" && doc.kind != "cancellation" {
+    if let Some(m) = &mandate {
+        // SEPA direct debit (59) with the debited account (BT-91).
+        x.push_str("<ram:SpecifiedTradeSettlementPaymentMeans><ram:TypeCode>59</ram:TypeCode>");
+        let _ = write!(x, "<ram:PayerPartyDebtorFinancialAccount><ram:IBANID>{}</ram:IBANID></ram:PayerPartyDebtorFinancialAccount>", util::normalize_iban(&m.iban));
+        x.push_str("</ram:SpecifiedTradeSettlementPaymentMeans>");
+    } else if !c.iban.is_empty() && doc.doc_type == "invoice" && doc.kind != "cancellation" {
         x.push_str("<ram:SpecifiedTradeSettlementPaymentMeans><ram:TypeCode>58</ram:TypeCode>");
         let _ = write!(x, "<ram:PayeePartyCreditorFinancialAccount><ram:IBANID>{}</ram:IBANID><ram:AccountName>{}</ram:AccountName></ram:PayeePartyCreditorFinancialAccount>", util::normalize_iban(&c.iban), esc(&c.name));
         if !c.bic.is_empty() {
@@ -335,9 +350,10 @@ pub fn generate_cii(conn: &Connection, doc: &Document, guideline: &str) -> Resul
     let gross = totals.gross * flip;
     if doc.doc_type == "invoice" && doc.kind != "cancellation" {
         x.push_str("<ram:SpecifiedTradePaymentTerms>");
-        let mut desc = match doc.due_date {
-            Some(d) => format!("Zahlbar bis {} ohne Abzug.", util::fmt_date(d)),
-            None => "Zahlbar sofort ohne Abzug.".into(),
+        let mut desc = match (doc.due_date, &mandate) {
+            (Some(d), Some(_)) => format!("Der Betrag wird am {} per SEPA-Lastschrift eingezogen.", util::fmt_date(d)),
+            (Some(d), None) => format!("Zahlbar bis {} ohne Abzug.", util::fmt_date(d)),
+            (None, _) => "Zahlbar sofort ohne Abzug.".into(),
         };
         if doc.cash_discount_percent > Decimal::ZERO && doc.cash_discount_days > 0 {
             if xrechnung {
@@ -349,6 +365,10 @@ pub fn generate_cii(conn: &Connection, doc: &Document, guideline: &str) -> Resul
         let _ = write!(x, "<ram:Description>{}</ram:Description>", esc(&desc));
         if let Some(d) = doc.due_date {
             let _ = write!(x, "<ram:DueDateDateTime><udt:DateTimeString format=\"102\">{}</udt:DateTimeString></ram:DueDateDateTime>", date102(d));
+        }
+        if let Some(m) = &mandate {
+            // BT-89: Mandatsreferenz
+            let _ = write!(x, "<ram:DirectDebitMandateID>{}</ram:DirectDebitMandateID>", esc(&m.reference));
         }
         x.push_str("</ram:SpecifiedTradePaymentTerms>");
     }

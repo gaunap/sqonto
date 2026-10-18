@@ -70,6 +70,7 @@ import { AccountSelect, DateField, MoneyInput } from '@/components/inputs';
 import { Page, PageHeader, SqontoLogo, UnsavedChangesGuard, confirmAction } from '@/components/ui';
 import { date, dateTime, money, today } from '@/lib/format';
 import { BOOKKEEPING, COUNTRIES, EINVOICE_FORMATS } from '@/lib/labels';
+import { creditorIdValid } from '@/lib/sepa';
 import { PaymentAccountModal } from '../banking/BankPage';
 import { UpdatesTab } from './UpdatesTab';
 
@@ -128,6 +129,31 @@ function CompanyTab({ s, patch }: { s: Settings; patch: Patch }) {
               <TextInput label="Bank" value={c.bank_name} onChange={(e) => set({ bank_name: e.currentTarget.value })} />
               <TextInput label="IBAN" value={c.iban} onChange={(e) => set({ iban: e.currentTarget.value })} />
               <TextInput label="BIC" value={c.bic} onChange={(e) => set({ bic: e.currentTarget.value })} />
+            </SimpleGrid>
+            <Text fw={650} mt="md">
+              SEPA-Lastschrift
+            </Text>
+            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+              <TextInput
+                label="Gläubiger-Identifikationsnummer"
+                placeholder="DE98ZZZ09999999999"
+                description="Bei der Deutschen Bundesbank zu beantragen; nötig, um Rechnungen per Lastschrift einzuziehen"
+                value={s.debit.creditor_id}
+                onChange={(e) => {
+                  const v = e.currentTarget.value;
+                  patch((x) => ({ ...x, debit: { ...x.debit, creditor_id: v } }));
+                }}
+                error={s.debit.creditor_id.trim() && !creditorIdValid(s.debit.creditor_id) ? 'Prüfziffer oder Format ungültig' : undefined}
+              />
+              <NumberInput
+                label="Frist der Vorabankündigung"
+                suffix=" Tage"
+                min={1}
+                max={30}
+                description="14 Tage, sofern mit den Kunden keine kürzere Frist vereinbart ist (steht dann im Mandat)"
+                value={s.debit.prenotification_days}
+                onChange={(v) => patch((x) => ({ ...x, debit: { ...x.debit, prenotification_days: Number(v) || 14 } }))}
+              />
             </SimpleGrid>
           </Stack>
         </Card>
@@ -352,6 +378,7 @@ function TaxTab({ s, patch }: { s: Settings; patch: Patch }) {
 
 const TEXT_KEYS: { key: string; label: string }[] = [
   { key: 'invoice', label: 'Rechnung' },
+  { key: 'invoice_debit', label: 'Rechnung (Lastschrift)' },
   { key: 'quote', label: 'Angebot' },
   { key: 'order', label: 'Auftragsbestätigung' },
   { key: 'delivery', label: 'Lieferschein' },
@@ -404,11 +431,21 @@ function DocsTab({ s, patch }: { s: Settings; patch: Patch }) {
             ))}
           </Tabs.List>
         </Tabs>
-        <Stack gap="sm">
-          <TextInput label="Titel" value={texts.title} onChange={(e) => setText({ title: e.currentTarget.value })} />
-          <Textarea label="Einleitungstext" minRows={4} value={texts.intro} onChange={(e) => setText({ intro: e.currentTarget.value })} />
-          <Textarea label="Schlusstext" minRows={4} value={texts.closing} onChange={(e) => setText({ closing: e.currentTarget.value })} />
-        </Stack>
+        {key === 'invoice_debit' ? (
+          <Textarea
+            label="Schlusstext"
+            description="Ersetzt bei Rechnungen per SEPA-Lastschrift den Schlusstext der Rechnung und dient als Vorabankündigung. Zusätzliche Platzhalter: {{Mandatsreferenz}}, {{Gläubiger-ID}}, {{Kunden-IBAN}}"
+            minRows={4}
+            value={texts.closing}
+            onChange={(e) => setText({ closing: e.currentTarget.value })}
+          />
+        ) : (
+          <Stack gap="sm">
+            <TextInput label="Titel" value={texts.title} onChange={(e) => setText({ title: e.currentTarget.value })} />
+            <Textarea label="Einleitungstext" minRows={4} value={texts.intro} onChange={(e) => setText({ intro: e.currentTarget.value })} />
+            <Textarea label="Schlusstext" minRows={4} value={texts.closing} onChange={(e) => setText({ closing: e.currentTarget.value })} />
+          </Stack>
+        )}
       </Card>
     </Stack>
   );

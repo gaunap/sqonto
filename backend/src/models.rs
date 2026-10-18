@@ -381,6 +381,10 @@ entity! {
         pub notes: String,
         pub created_at: String,
         pub updated_at: String,
+        /// "" (transfer) | debit (SEPA-Lastschrift)
+        pub payment_method: String,
+        /// Lastschriftmandat used to collect the invoice.
+        pub mandate_id: Option<i64>,
     }
 }
 
@@ -720,6 +724,63 @@ entity! {
 }
 
 entity! {
+    /// SEPA-Lastschriftmandat granted by a customer.
+    pub struct Mandate in "mandates" {
+        pub id: i64,
+        pub contact_id: i64,
+        /// Mandatsreferenz (unique, at most 35 characters).
+        pub reference: String,
+        pub signed_on: NaiveDate,
+        /// CORE (Basislastschrift) | B2B (Firmenlastschrift)
+        pub scheme: String,
+        /// Recurring collections; otherwise a one-off mandate for a single collection.
+        pub recurring: bool,
+        pub account_holder: String,
+        pub iban: String,
+        pub bic: String,
+        pub revoked_on: Option<NaiveDate>,
+        pub notes: String,
+        pub created_at: String,
+    }
+}
+
+entity! {
+    /// SEPA direct debit file (pain.008) for open invoices; the file itself is in the `xml` column.
+    pub struct DebitRun in "debit_runs" {
+        pub id: i64,
+        pub account_id: i64,
+        pub message_id: String,
+        #[ts(type = "number")]
+        pub total: Decimal,
+        pub count: i64,
+        pub created_at: String,
+    }
+}
+
+entity! {
+    pub struct DebitRunItem in "debit_run_items" {
+        pub id: i64,
+        pub run_id: i64,
+        pub document_id: i64,
+        pub mandate_id: i64,
+        #[ts(type = "number")]
+        pub amount: Decimal,
+        pub collection_date: NaiveDate,
+        /// FRST | RCUR | OOFF
+        pub sequence: String,
+        /// CORE | B2B
+        pub scheme: String,
+        pub debtor_name: String,
+        pub debtor_iban: String,
+        pub debtor_bic: String,
+        pub mandate_reference: String,
+        pub mandate_signed_on: NaiveDate,
+        pub remittance: String,
+        pub end_to_end_id: String,
+    }
+}
+
+entity! {
     /// Booking rule for bank movements (Bankregel).
     pub struct BankRule in "bank_rules" {
         pub id: i64,
@@ -985,6 +1046,24 @@ pub struct Settings {
     pub backup: BackupSettings,
     pub email: EmailSettings,
     pub updates: UpdateSettings,
+    pub debit: DebitSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(default)]
+#[ts(export)]
+pub struct DebitSettings {
+    /// Gläubiger-Identifikationsnummer (from the Deutsche Bundesbank).
+    pub creditor_id: String,
+    /// Days between the pre-notification (the invoice) and the collection; 14 unless a shorter
+    /// period was agreed with the customers.
+    pub prenotification_days: i64,
+}
+
+impl Default for DebitSettings {
+    fn default() -> Self {
+        Self { creditor_id: String::new(), prenotification_days: 14 }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

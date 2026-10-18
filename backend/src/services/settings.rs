@@ -15,13 +15,18 @@ use crate::util::now_str;
 use crate::{bail_user, chart};
 
 pub fn load(conn: &Connection) -> Result<Settings> {
-    match db::meta_get(conn, "settings")? {
+    let mut s = match db::meta_get(conn, "settings")? {
         Some(raw) => match serde_json::from_str(&raw) {
-            Ok(s) => Ok(s),
-            Err(e) => recover(conn, &raw, &e),
+            Ok(s) => s,
+            Err(e) => recover(conn, &raw, &e)?,
         },
-        None => Ok(Settings::default()),
+        None => Settings::default(),
+    };
+    // Text templates added in a later version.
+    for (key, texts) in defaults::default_texts() {
+        s.docs.texts.entry(key).or_insert(texts);
     }
+    Ok(s)
 }
 
 /// Settings that no longer parse as a whole (e.g. after a field changed its type) are not thrown

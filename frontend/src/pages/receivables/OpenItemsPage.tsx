@@ -7,8 +7,9 @@ import { useNavigate, useSearchParams } from 'react-router';
 import { ActionIcon, Badge, Button, Card, Group, Paper, SimpleGrid, Stack, Tabs, Text, Tooltip, UnstyledButton } from '@mantine/core';
 import { IconBellRinging, IconBuildingBank, IconCash, IconDownload, IconExternalLink, IconFileExport, IconTrash } from '@tabler/icons-react';
 import { api, downloadFile, openFile } from '@/api/client';
-import { notifyError, useAction, useApi } from '@/api/hooks';
-import type { AgingBucket, DocumentListItem, DunningListItem, DunningSuggestion, OpenItems, PaymentRunView, ReceiptListItem, TransferCandidate } from '@/api/types';
+import { notifyError, useAction, useApi, useSettings } from '@/api/hooks';
+import type { AgingBucket, DebitCandidate, DocumentListItem, DunningListItem, DunningSuggestion, OpenItems, PaymentRunView, ReceiptListItem, TransferCandidate } from '@/api/types';
+import { DebitTab } from '@/components/DebitRuns';
 import { ListTable } from '@/components/ListTable';
 import { PaymentModal } from '@/components/PaymentModal';
 import { TransferModal } from '@/components/TransferModal';
@@ -63,6 +64,10 @@ export function OpenItemsPage() {
   const [selected, setSelected] = useState<DocumentListItem[]>([]);
   const { data: candidates } = useApi<TransferCandidate[]>('/payment-runs/candidates');
   const { data: runs } = useApi<PaymentRunView[]>('/payment-runs');
+  const { data: debits } = useApi<DebitCandidate[]>('/debit-runs/candidates');
+  const debitsReady = (debits ?? []).filter((c) => !c.problem && !c.pending).length;
+  const { data: settings } = useSettings();
+  const showDebits = !!settings?.debit.creditor_id.trim() || (debits ?? []).length > 0 || tab === 'lastschriften';
   const [selectedPayables, setSelectedPayables] = useState<ReceiptListItem[]>([]);
   const [transferOpen, setTransferOpen] = useState(false);
   const candidateOf = useMemo(() => new Map((candidates ?? []).map((c) => [c.receipt_id, c])), [candidates]);
@@ -116,6 +121,11 @@ export function OpenItemsPage() {
           <Tabs.Tab value="verbindlichkeiten" rightSection={<Badge size="sm" variant="light" color="grape">{money(data?.payables_total ?? 0)}</Badge>}>
             Verbindlichkeiten
           </Tabs.Tab>
+          {showDebits ? (
+            <Tabs.Tab value="lastschriften" rightSection={debitsReady ? <Badge size="sm">{debitsReady}</Badge> : undefined}>
+              Lastschriften
+            </Tabs.Tab>
+          ) : null}
           <Tabs.Tab value="mahnwesen" rightSection={dueSuggestions.length ? <Badge size="sm" color="orange">{dueSuggestions.length}</Badge> : undefined}>
             Mahnwesen
           </Tabs.Tab>
@@ -398,6 +408,10 @@ export function OpenItemsPage() {
               setSelectedPayables([]);
             }}
           />
+        </Tabs.Panel>
+
+        <Tabs.Panel value="lastschriften">
+          <DebitTab />
         </Tabs.Panel>
 
         <Tabs.Panel value="mahnwesen">

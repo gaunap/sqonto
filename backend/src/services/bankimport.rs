@@ -59,6 +59,10 @@ pub struct ImportedTx {
     /// Payment service provider of the report (paypal, stripe, sumup, psp); empty for bank data.
     #[serde(default)]
     pub provider: String,
+    /// End-to-end reference and return reason (CAMT); appended to the purpose when imported, but
+    /// not part of the hash, so that files imported before are still recognised.
+    #[serde(default)]
+    pub reference: String,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -245,6 +249,7 @@ fn parse_csv(text: &str, mapping: Option<CsvMapping>) -> ImportPreview {
                     account: String::new(),
                     kind: String::new(),
                     provider: String::new(),
+                    reference: String::new(),
                 });
             }
             (cols, sample)
@@ -315,6 +320,18 @@ fn parse_camt(xml: &str) -> Result<ImportPreview> {
             purpose.push(t.trim().to_string());
         }
         let purpose = purpose.join(" ");
+        // End-to-end reference and return reason identify collections and Rücklastschriften.
+        let mut reference = Vec::new();
+        if let Some(e2e) = by_name(ntry, "EndToEndId").and_then(|n| n.text()).map(str::trim)
+            && !e2e.is_empty()
+            && e2e != "NOTPROVIDED"
+            && !purpose.contains(e2e)
+        {
+            reference.push(format!("EREF: {e2e}"));
+        }
+        if let Some(code) = by_name(ntry, "RtrInf").and_then(|r| by_name(r, "Cd")).and_then(|n| n.text()) {
+            reference.push(format!("Rückgabegrund: {}", code.trim()));
+        }
         transactions.push(ImportedTx {
             date,
             amount: if credit { amount } else { -amount },
@@ -327,6 +344,7 @@ fn parse_camt(xml: &str) -> Result<ImportPreview> {
             account: String::new(),
             kind: String::new(),
             provider: String::new(),
+            reference: reference.join(" "),
         });
     }
     if pending > 0 {
@@ -418,7 +436,7 @@ pub fn import(conn: &Connection, account_id: i64, mut txs: Vec<ImportedTx>, auto
             amount: t.amount,
             counterparty: t.counterparty,
             counterparty_iban: t.iban,
-            purpose: t.purpose,
+            purpose: if t.reference.is_empty() { t.purpose } else { format!("{} {}", t.purpose, t.reference).trim().to_string() },
             import_hash: h,
             source: if t.provider.is_empty() { "import".into() } else { format!("import-{}", t.provider) },
             status: "open".into(),
@@ -432,6 +450,11 @@ pub fn import(conn: &Connection, account_id: i64, mut txs: Vec<ImportedTx>, auto
             let alloc = crate::models::Allocation { kind: "account".into(), account: preset, amount: tx.amount, date: tx.date, description, ..Default::default() };
             finance::update(conn, id, TransactionInput { tx, allocations: vec![alloc] })?;
             booked += 1;
+            continue;
+        }
+        // Rücklastschriften and collections credited as one amount.
+        if auto_match && (crate::services::debit::match_return(conn, id)? || crate::services::debit::match_collection(conn, id)?) {
+            matched += 1;
             continue;
         }
         if auto_match {

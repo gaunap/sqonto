@@ -391,8 +391,24 @@ pub fn new_template(conn: &Connection, doc_type: &str, contact_id: Option<i64>) 
     if let Some(cid) = contact_id {
         let c: Contact = db::get(conn, cid)?;
         apply_contact(&s, &mut doc, &c);
+        crate::services::debit::apply_default(conn, &s, &mut doc)?;
     }
     Ok(DocumentInput { doc, lines: vec![] })
+}
+
+/// Exchanges the default closing text of invoices when the payment method changes (transfer
+/// request ↔ pre-notification of the direct debit); an edited text is kept.
+pub fn swap_closing(s: &Settings, doc: &mut Document, method: &str) {
+    if doc.doc_type != "invoice" || doc.kind != "standard" {
+        return;
+    }
+    let text = |k: &str| s.docs.texts.get(k).map(|t| t.closing.clone()).unwrap_or_default();
+    let (transfer, debit) = (text("invoice"), text("invoice_debit"));
+    if method == "debit" && doc.closing_text == transfer {
+        doc.closing_text = debit;
+    } else if method != "debit" && doc.closing_text == debit {
+        doc.closing_text = transfer;
+    }
 }
 
 pub fn apply_contact(s: &Settings, doc: &mut Document, c: &Contact) {
@@ -439,6 +455,17 @@ fn normalize(s: &Settings, doc: &mut Document, lines: &mut [DocumentLine]) -> Re
         && doc.due_date.is_none()
     {
         doc.due_date = Some(doc.date + Duration::days(days));
+    }
+    if doc.doc_type != "invoice" || doc.kind == "cancellation" || doc.payment_method != "debit" {
+        doc.payment_method = String::new();
+        doc.mandate_id = None;
+    } else if let Some(due) = doc.due_date {
+        // Direct debits are collected on TARGET2 business days only.
+        let collection = util::target_day_from(due);
+        if collection != due {
+            doc.due_date = Some(collection);
+            doc.payment_terms_days = Some((collection - doc.date).num_days());
+        }
     }
     for (i, l) in lines.iter_mut().enumerate() {
         l.position = i as i64 + 1;
@@ -573,6 +600,9 @@ fn issue(conn: &Connection, id: i64, check_invoice_data: bool) -> Result<Documen
         if !missing.is_empty() {
             bail_user!("Für eine ordnungsgemäße Rechnung (§ 14 UStG) fehlt: {}.", missing.join("; "));
         }
+    }
+    if doc.payment_method == "debit" {
+        crate::services::debit::check_issue(conn, &s, &doc)?;
     }
     doc.number = cfg::next_number(conn, range_key(&doc), doc.date)?;
     doc.status = "open".into();
@@ -737,6 +767,12 @@ fn derived_doc(conn: &Connection, src: &Document, doc_type: &str, kind: &str) ->
     }
     if doc_type != "quote" {
         d.valid_until = None;
+    }
+    if src.doc_type == "invoice" {
+        let method = d.payment_method.clone();
+        swap_closing(&s, &mut d, &method);
+    } else {
+        crate::services::debit::apply_default(conn, &s, &mut d)?;
     }
     d.created_at = now_str();
     d.updated_at = now_str();

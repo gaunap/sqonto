@@ -10,6 +10,7 @@ pub mod bankimport;
 pub mod bankrules;
 pub mod calc;
 pub mod datev;
+pub mod debit;
 pub mod defaults;
 pub mod demo;
 pub mod documents;

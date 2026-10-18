@@ -33,18 +33,18 @@ import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { IconBraces, IconChevronDown, IconChevronUp, IconDeviceFloppy, IconEye, IconEyeOff, IconLock, IconSend, IconInfoCircle } from '@tabler/icons-react';
 import dayjs from 'dayjs';
 import { api } from '@/api/client';
-import { notifyError, useAction, useLayouts, useSettings } from '@/api/hooks';
-import type { ContactDefaults, Document, DocumentFull, DocumentInput, PreviewResult } from '@/api/types';
+import { notifyError, useAction, useApi, useLayouts, useSettings } from '@/api/hooks';
+import type { ContactDefaults, Document, DocumentFull, DocumentInput, MandateView, PreviewResult } from '@/api/types';
 import { ContactSelect, DateField } from '@/components/inputs';
 import { emptyLine, LinesEditor, newKey, type EditorLine } from '@/components/LinesEditor';
 import { PagesPreview, TotalsBox } from '@/components/DocumentParts';
 import { Page, PageHeader, StatusBadge } from '@/components/ui';
 import { calculate } from '@/lib/calc';
-import { date as fmtDate, money, today } from '@/lib/format';
+import { date as fmtDate, formatIban, money, today } from '@/lib/format';
 import { useLeaveWarning } from '@/lib/desktop';
 import { DOC_TYPES, EINVOICE_FORMATS, TAX_MODES, docLabel, type DocType } from '@/lib/labels';
 
-const PLACEHOLDERS = ['Anrede', 'Kunde', 'Ansprechpartner', 'Nummer', 'Datum', 'Betrag', 'Fällig am', 'Zahlungsziel', 'Gültig bis', 'Skonto', 'Firma', 'Referenz', 'Kundennummer', 'Leistungszeitraum', 'Monat', 'Quartal', 'Jahr'];
+const PLACEHOLDERS = ['Anrede', 'Kunde', 'Ansprechpartner', 'Nummer', 'Datum', 'Betrag', 'Fällig am', 'Zahlungsziel', 'Gültig bis', 'Skonto', 'Firma', 'Referenz', 'Kundennummer', 'Leistungszeitraum', 'Monat', 'Quartal', 'Jahr', 'Mandatsreferenz', 'Gläubiger-ID', 'Kunden-IBAN'];
 
 function PlaceholderMenu({ onInsert }: { onInsert: (p: string) => void }) {
   return (
@@ -89,6 +89,7 @@ export function DocumentEditorPage() {
   const [moreOpen, setMoreOpen] = useState(false);
   const [persons, setPersons] = useState<string[]>([]);
   const [useRange, setUseRange] = useState(false);
+  const { data: mandates } = useApi<MandateView[]>(doc?.contact_id && doc.doc_type === 'invoice' ? '/mandates' : null, { contact_id: doc?.contact_id ?? undefined });
   const loadedFor = useRef<string>('');
 
   // Load template or existing document
@@ -197,9 +198,22 @@ export function DocumentEditorPage() {
   const label = docLabel(doc.doc_type, doc.kind);
   const smallBusiness = settings.tax.small_business;
 
+  /** Payment method with the matching default closing text (transfer request or pre-notification). */
+  const paymentPatch = (method: string, mandateId: number | null): Partial<Document> => {
+    if (doc.doc_type !== 'invoice' || doc.kind === 'cancellation') return {};
+    const transfer = settings.docs.texts.invoice?.closing ?? '';
+    const debit = settings.docs.texts.invoice_debit?.closing ?? '';
+    let closing = doc.closing_text;
+    if (doc.kind === 'standard' && method === 'debit' && closing === transfer) closing = debit;
+    if (doc.kind === 'standard' && method !== 'debit' && closing === debit) closing = transfer;
+    return { payment_method: method, mandate_id: method === 'debit' ? mandateId : null, closing_text: closing };
+  };
+  const debit = doc.payment_method === 'debit';
+  const prenotification = settings.debit.prenotification_days;
+
   const onContact = async (contactId: number | null) => {
     if (!contactId) {
-      patch({ contact_id: null });
+      patch({ contact_id: null, ...paymentPatch('', null) });
       setPersons([]);
       return;
     }
@@ -215,6 +229,7 @@ export function DocumentEditorPage() {
         einvoice_format: d.einvoice_format,
         payment_terms_days: isInvoiceLike ? days : doc.payment_terms_days,
         due_date: isInvoiceLike && days != null ? dayjs(doc.date).add(days, 'day').format('YYYY-MM-DD') : doc.due_date,
+        ...paymentPatch(d.payment_method, d.mandate_id),
       });
       setPersons(d.persons);
     } catch (e) {
@@ -310,7 +325,38 @@ export function DocumentEditorPage() {
                             patch({ payment_terms_days: days, due_date: days != null ? dayjs(doc.date).add(days, 'day').format('YYYY-MM-DD') : doc.due_date });
                           }}
                         />
-                        <DateField label="Fällig am" value={doc.due_date} onChange={(v) => patch({ due_date: v, payment_terms_days: v ? dayjs(v).diff(dayjs(doc.date), 'day') : doc.payment_terms_days })} />
+                        <DateField label={debit ? 'Einzug am' : 'Fällig am'} value={doc.due_date} onChange={(v) => patch({ due_date: v, payment_terms_days: v ? dayjs(v).diff(dayjs(doc.date), 'day') : doc.payment_terms_days })} />
+                      </>
+                    )}
+                    {doc.doc_type === 'invoice' && doc.kind !== 'cancellation' && (
+                      <>
+                        <Select
+                          label="Zahlungsart"
+                          allowDeselect={false}
+                          value={debit ? 'debit' : 'transfer'}
+                          data={[
+                            { value: 'transfer', label: 'Überweisung' },
+                            { value: 'debit', label: 'SEPA-Lastschrift', disabled: !(mandates ?? []).some((m) => m.usable) && !debit },
+                          ]}
+                          onChange={(v) => {
+                            const m = (mandates ?? []).find((x) => x.usable);
+                            patch(paymentPatch(v === 'debit' ? 'debit' : '', doc.mandate_id ?? m?.mandate.id ?? null));
+                          }}
+                          description={!debit && doc.contact_id && !(mandates ?? []).some((m) => m.usable) ? 'Lastschrift: zuerst ein Mandat beim Kontakt erfassen' : undefined}
+                          error={debit && (doc.payment_terms_days ?? 0) < prenotification ? `Vorabankündigung: Einzug frühestens ${prenotification} Tage nach Rechnungsdatum` : undefined}
+                        />
+                        {debit && (
+                          <Select
+                            label="Mandat"
+                            allowDeselect={false}
+                            value={doc.mandate_id ? String(doc.mandate_id) : null}
+                            data={(mandates ?? [])
+                              .filter((m) => m.usable || m.mandate.id === doc.mandate_id)
+                              .map((m) => ({ value: String(m.mandate.id), label: `${m.mandate.reference} · ${formatIban(m.mandate.iban)}${m.usable ? '' : ` (${m.status_label})`}` }))}
+                            onChange={(v) => patch({ mandate_id: v ? Number(v) : null })}
+                            error={!doc.mandate_id ? 'Bitte ein Mandat wählen' : (mandates ?? []).find((m) => m.mandate.id === doc.mandate_id && !m.usable)?.status_label}
+                          />
+                        )}
                       </>
                     )}
                     <TextInput label="Ihre Referenz / Bestellnr." value={doc.reference} onChange={(e) => patch({ reference: e.currentTarget.value })} />

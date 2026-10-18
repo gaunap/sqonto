@@ -549,7 +549,7 @@ pub async fn reset(State(st): State<AppState>, Json(req): Json<ResetRequest>) ->
     }
     st.write(|c| {
         for t in [
-            "document_archive", "payment_run_items", "payment_runs", "recurring_invoices", "bank_rules", "journal_lines", "journal_entries", "allocations", "transactions", "dunnings", "document_lines", "documents", "receipt_lines",
+            "document_archive", "debit_run_items", "debit_runs", "mandates", "payment_run_items", "payment_runs", "recurring_invoices", "bank_rules", "journal_lines", "journal_entries", "allocations", "transactions", "dunnings", "document_lines", "documents", "receipt_lines",
             "receipts", "assets", "manual_entries", "payment_accounts", "articles", "contacts", "activities", "ustva_filings", "zm_filings", "files",
             "number_ranges", "layouts", "accounts",
         ] {

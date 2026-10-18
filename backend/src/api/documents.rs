@@ -411,6 +411,7 @@ fn email_draft_of(c: &rusqlite::Connection, doc: &Document) -> anyhow::Result<Em
     let s = crate::services::settings::load(c)?;
     let contact = doc.contact_id.and_then(|id| db::find::<crate::models::Contact>(c, id).ok().flatten());
     let mut vars = docs::placeholders(&s, doc, contact.as_ref());
+    vars.extend(crate::services::debit::placeholders(c, &s, doc)?);
     vars.push(("Dokument", docs::type_label(&doc.doc_type, &doc.kind).to_string()));
     let mut attachments = vec![pdf_name(doc)];
     if doc.is_invoice_like() && doc.einvoice_format == "xrechnung" {
