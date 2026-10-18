@@ -397,6 +397,30 @@ CREATE TABLE IF NOT EXISTS ustva_filings (
   UNIQUE(year, period)
 );
 
+CREATE TABLE IF NOT EXISTS payment_runs (
+  id             INTEGER PRIMARY KEY,
+  account_id     INTEGER NOT NULL REFERENCES payment_accounts(id),
+  execution_date TEXT NOT NULL,
+  message_id     TEXT NOT NULL DEFAULT '',
+  total          TEXT NOT NULL DEFAULT '0',
+  count          INTEGER NOT NULL DEFAULT 0,
+  xml            TEXT NOT NULL DEFAULT '',
+  created_at     TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS payment_run_items (
+  id            INTEGER PRIMARY KEY,
+  run_id        INTEGER NOT NULL REFERENCES payment_runs(id) ON DELETE CASCADE,
+  receipt_id    INTEGER NOT NULL REFERENCES receipts(id),
+  amount        TEXT NOT NULL DEFAULT '0',
+  creditor_name TEXT NOT NULL DEFAULT '',
+  creditor_iban TEXT NOT NULL DEFAULT '',
+  creditor_bic  TEXT NOT NULL DEFAULT '',
+  remittance    TEXT NOT NULL DEFAULT '',
+  end_to_end_id TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_payment_run_items_receipt ON payment_run_items(receipt_id);
+
 CREATE TABLE IF NOT EXISTS zm_filings (
   id           INTEGER PRIMARY KEY,
   year         INTEGER NOT NULL,

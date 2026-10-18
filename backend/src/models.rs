@@ -742,6 +742,36 @@ entity! {
 }
 
 entity! {
+    /// SEPA credit transfer file (pain.001) created for open receipts; the file itself is in the
+    /// `xml` column.
+    pub struct PaymentRun in "payment_runs" {
+        pub id: i64,
+        pub account_id: i64,
+        pub execution_date: NaiveDate,
+        pub message_id: String,
+        #[ts(type = "number")]
+        pub total: Decimal,
+        pub count: i64,
+        pub created_at: String,
+    }
+}
+
+entity! {
+    pub struct PaymentRunItem in "payment_run_items" {
+        pub id: i64,
+        pub run_id: i64,
+        pub receipt_id: i64,
+        #[ts(type = "number")]
+        pub amount: Decimal,
+        pub creditor_name: String,
+        pub creditor_iban: String,
+        pub creditor_bic: String,
+        pub remittance: String,
+        pub end_to_end_id: String,
+    }
+}
+
+entity! {
     /// A Zusammenfassende Meldung marked as submitted; `content` holds the reported CSV rows.
     pub struct ZmFiling in "zm_filings" {
         pub id: i64,

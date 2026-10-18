@@ -5,12 +5,13 @@
 import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { ActionIcon, Badge, Button, Card, Group, Paper, SimpleGrid, Stack, Tabs, Text, Tooltip, UnstyledButton } from '@mantine/core';
-import { IconBellRinging, IconCash, IconDownload, IconExternalLink, IconFileExport, IconTrash } from '@tabler/icons-react';
+import { IconBellRinging, IconBuildingBank, IconCash, IconDownload, IconExternalLink, IconFileExport, IconTrash } from '@tabler/icons-react';
 import { api, downloadFile, openFile } from '@/api/client';
 import { notifyError, useAction, useApi } from '@/api/hooks';
-import type { AgingBucket, DocumentListItem, DunningListItem, DunningSuggestion, OpenItems, ReceiptListItem } from '@/api/types';
+import type { AgingBucket, DocumentListItem, DunningListItem, DunningSuggestion, OpenItems, PaymentRunView, ReceiptListItem, TransferCandidate } from '@/api/types';
 import { ListTable } from '@/components/ListTable';
 import { PaymentModal } from '@/components/PaymentModal';
+import { TransferModal } from '@/components/TransferModal';
 import { Page, PageHeader, StatusBadge, confirmAction } from '@/components/ui';
 import { exportCsv } from '@/lib/csv';
 import { documentIncoming, documentRemaining, receiptIncoming, receiptRemaining } from '@/lib/calc';
@@ -60,6 +61,12 @@ export function OpenItemsPage() {
   const [bucket, setBucket] = useState<string | null>(null);
   const [pBucket, setPBucket] = useState<string | null>(null);
   const [selected, setSelected] = useState<DocumentListItem[]>([]);
+  const { data: candidates } = useApi<TransferCandidate[]>('/payment-runs/candidates');
+  const { data: runs } = useApi<PaymentRunView[]>('/payment-runs');
+  const [selectedPayables, setSelectedPayables] = useState<ReceiptListItem[]>([]);
+  const [transferOpen, setTransferOpen] = useState(false);
+  const candidateOf = useMemo(() => new Map((candidates ?? []).map((c) => [c.receipt_id, c])), [candidates]);
+  const removeRun = useAction((id: number) => api.del(`/payment-runs/${id}`), { success: 'Überweisungsdatei verworfen' });
   const [paying, setPaying] = useState<{ kind: 'documents' | 'receipts'; id: number; open: number; title: string; fees?: number; incoming?: boolean } | null>(null);
 
   const receivables = useMemo(() => (data?.receivables ?? []).filter((d) => inBucket(d.days_overdue, bucket)), [data, bucket]);
@@ -225,9 +232,22 @@ export function OpenItemsPage() {
           <Stack gap="md">
             {data && <Buckets buckets={data.payable_buckets} active={pBucket} onSelect={setPBucket} />}
             <Card padding={0}>
+              <Group justify="space-between" p="md">
+                <Text size="sm" c="dimmed">
+                  {selectedPayables.length
+                    ? `${selectedPayables.length} ausgewählt · ${money(selectedPayables.reduce((s, r) => s + r.open_amount, 0))}`
+                    : 'Belege auswählen, um eine SEPA-Überweisungsdatei zu erstellen'}
+                </Text>
+                <Button leftSection={<IconBuildingBank size={16} />} disabled={selectedPayables.length === 0} onClick={() => setTransferOpen(true)}>
+                  Überweisungen erstellen{selectedPayables.length ? ` (${selectedPayables.length})` : ''}
+                </Button>
+              </Group>
               <ListTable<ReceiptListItem>
                 records={payables}
                 idAccessor={(r) => r.receipt.id}
+                selectedRecords={selectedPayables}
+                onSelectedRecordsChange={setSelectedPayables}
+                isRecordSelectable={(r) => candidateOf.has(r.receipt.id)}
                 defaultSort={{ column: 'receipt.due_date', direction: 'asc' }}
                 onRowClick={(r) => navigate(`/belege/${r.receipt.id}`)}
                 emptyText="Keine offenen Verbindlichkeiten"
@@ -236,7 +256,25 @@ export function OpenItemsPage() {
                   { accessor: 'party', title: 'Lieferant', sortable: true },
                   { accessor: 'receipt.date', title: 'Datum', sortable: true, render: (r) => date(r.receipt.date) },
                   { accessor: 'receipt.due_date', title: 'Fällig', sortable: true, render: (r) => <Text size="sm" c={r.overdue ? 'red.7' : undefined}>{date(r.receipt.due_date)}</Text> },
-                  { accessor: 'receipt.status', title: 'Status', render: (r) => <StatusBadge status={r.receipt.status} docType="invoice" daysOverdue={r.overdue ? 1 : 0} size="sm" /> },
+                  {
+                    accessor: 'receipt.status',
+                    title: 'Status',
+                    render: (r) => {
+                      const pending = candidateOf.get(r.receipt.id)?.pending;
+                      return (
+                        <Group gap={4} wrap="nowrap">
+                          <StatusBadge status={r.receipt.status} docType="invoice" daysOverdue={r.overdue ? 1 : 0} size="sm" />
+                          {pending && (
+                            <Tooltip label={`In einer Überweisungsdatei zur Ausführung am ${date(pending)}`}>
+                              <Badge size="sm" variant="light" color="blue" leftSection={<IconBuildingBank size={11} />}>
+                                {date(pending)}
+                              </Badge>
+                            </Tooltip>
+                          )}
+                        </Group>
+                      );
+                    },
+                  },
                   { accessor: 'open_amount', title: 'Offen', sortable: true, textAlign: 'right', render: (r) => <Text size="sm" fw={600} className="tabular" c={r.open_amount < 0 ? 'grape.7' : undefined}>{money(r.open_amount)}</Text> },
                   {
                     accessor: 'pay',
@@ -262,7 +300,104 @@ export function OpenItemsPage() {
                 ]}
               />
             </Card>
+            {(runs ?? []).length > 0 && (
+              <Card padding={0}>
+                <Text fw={650} p="md" pb="xs">
+                  Überweisungsdateien
+                </Text>
+                <ListTable<PaymentRunView>
+                  records={runs}
+                  idAccessor={(r) => r.run.id}
+                  pageSize={10}
+                  minHeight={0}
+                  columns={[
+                    { accessor: 'run.created_at', title: 'Erstellt', render: (r) => date(r.run.created_at.slice(0, 10)) },
+                    { accessor: 'run.execution_date', title: 'Ausführung', render: (r) => date(r.run.execution_date) },
+                    { accessor: 'account_name', title: 'Konto' },
+                    {
+                      accessor: 'items',
+                      title: 'Überweisungen',
+                      render: (r) => {
+                        const paid = r.items.filter((i) => i.paid).length;
+                        return (
+                          <Tooltip
+                            multiline
+                            label={r.items.map((i) => (
+                              <div key={i.item.id}>
+                                {i.receipt_number} · {i.item.creditor_name} · {money(i.item.amount)}
+                                {i.paid ? ' · bezahlt' : ''}
+                              </div>
+                            ))}
+                          >
+                            <Text size="sm">
+                              {r.run.count} Überweisung{r.run.count === 1 ? '' : 'en'} ·{' '}
+                              {paid === r.items.length ? (
+                                <Text span c="teal.7" size="sm">
+                                  alle bezahlt
+                                </Text>
+                              ) : (
+                                `${paid} bezahlt`
+                              )}
+                            </Text>
+                          </Tooltip>
+                        );
+                      },
+                    },
+                    {
+                      accessor: 'run.total',
+                      title: 'Summe',
+                      textAlign: 'right',
+                      render: (r) => (
+                        <Text size="sm" fw={600} className="tabular">
+                          {money(r.run.total)}
+                        </Text>
+                      ),
+                    },
+                    {
+                      accessor: 'actions',
+                      title: '',
+                      width: 90,
+                      render: (r) => (
+                        <Group gap={4} wrap="nowrap" justify="flex-end">
+                          <Tooltip label="Datei herunterladen">
+                            <ActionIcon variant="subtle" onClick={() => downloadFile(`/payment-runs/${r.run.id}/xml`).catch((e) => notifyError(e))} aria-label="Herunterladen">
+                              <IconDownload size={16} />
+                            </ActionIcon>
+                          </Tooltip>
+                          <Tooltip label="Verwerfen">
+                            <ActionIcon
+                              variant="subtle"
+                              color="red"
+                              aria-label="Verwerfen"
+                              onClick={() =>
+                                confirmAction({
+                                  title: 'Überweisungsdatei verwerfen',
+                                  message: 'Nur verwerfen, wenn die Datei nicht an die Bank übergeben wurde. Die Belege bleiben offen und können erneut überwiesen werden.',
+                                  confirmLabel: 'Verwerfen',
+                                  danger: true,
+                                  onConfirm: () => removeRun.mutate(r.run.id),
+                                })
+                              }
+                            >
+                              <IconTrash size={16} />
+                            </ActionIcon>
+                          </Tooltip>
+                        </Group>
+                      ),
+                    },
+                  ]}
+                />
+              </Card>
+            )}
           </Stack>
+          <TransferModal
+            opened={transferOpen}
+            candidates={selectedPayables.map((r) => candidateOf.get(r.receipt.id)).filter((c): c is TransferCandidate => !!c)}
+            onClose={() => {
+              setTransferOpen(false);
+              setSelectedPayables([]);
+            }}
+          />
         </Tabs.Panel>
 
         <Tabs.Panel value="mahnwesen">

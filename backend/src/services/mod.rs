@@ -23,6 +23,7 @@ pub mod posting;
 pub mod receipts;
 pub mod recurring;
 pub mod reports;
+pub mod sepa;
 pub mod settings;
 pub mod update;
 pub mod zm;

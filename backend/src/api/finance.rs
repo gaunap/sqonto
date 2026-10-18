@@ -19,6 +19,7 @@ use crate::services::bankimport::{self, CsvMapping, ImportPreview, ImportSummary
 use crate::services::einvoice::{self, ImportResult};
 use crate::services::finance::{self as fin, CashEntryInput, Cashbook, MatchSuggestion, PaymentAccountView, PaymentRequest, TransactionFilter, TransactionInput, TransactionView};
 use crate::services::receipts::{self as rec, ReceiptFilter, ReceiptFull, ReceiptInput, ReceiptListItem};
+use crate::services::sepa::{self, PaymentRunRequest, PaymentRunView, TransferCandidate};
 use crate::state::AppState;
 use crate::util::{fmt_date, fmt_money, today, ymd};
 
@@ -343,4 +344,27 @@ pub async fn cashbook_pdf(State(st): State<AppState>, Query(q): Query<CashQ>) ->
     })?;
     let bytes = render_pdf(&st, job, false).await?;
     Ok(file_response(bytes, "application/pdf", &name, true))
+}
+
+// ---------------------------------------------------------------- SEPA-Überweisungen
+
+pub async fn transfer_candidates(State(st): State<AppState>) -> ApiResult<Vec<TransferCandidate>> {
+    st.read(sepa::candidates).map(Json)
+}
+
+pub async fn payment_runs(State(st): State<AppState>) -> ApiResult<Vec<PaymentRunView>> {
+    st.read(sepa::list).map(Json)
+}
+
+pub async fn create_payment_run(State(st): State<AppState>, Json(req): Json<PaymentRunRequest>) -> ApiResult<PaymentRunView> {
+    st.write(|c| sepa::create(c, req)).map(Json)
+}
+
+pub async fn payment_run_file(State(st): State<AppState>, Path(id): Path<i64>) -> Result<Response, AppError> {
+    let (name, xml) = st.read(|c| sepa::file(c, id))?;
+    Ok(file_response(xml.into_bytes(), "application/xml; charset=utf-8", &name, true))
+}
+
+pub async fn delete_payment_run(State(st): State<AppState>, Path(id): Path<i64>) -> ApiResult<MessageResponse> {
+    st.write(|c| sepa::delete(c, id)).map(|_| Json(MessageResponse { message: "Überweisungsdatei verworfen".into() }))
 }

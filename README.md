@@ -19,7 +19,8 @@ Projektwebsite: [sqonto.de](https://sqonto.de).
 - **Einkauf:** Belegerfassung (Upload, Kategorisierung, Aufteilung nach Steuersätzen, § 13b),
   Lieferanten automatisch aus E-Rechnungen anlegen.
 - **Bank & Kasse:** CSV- und CAMT-Import mit automatischer Zuordnung, Zahlungen, Skonto,
-  Ausbuchungen, GoBD-konformes Kassenbuch mit Stornobuchungen.
+  Ausbuchungen, SEPA-Überweisungsdateien (pain.001) für offene Belege, GoBD-konformes Kassenbuch
+  mit Stornobuchungen.
 - **Buchhaltung:** Einnahmen-Überschuss-Rechnung (Ist-Versteuerung) oder doppelte Buchführung
   (Bilanzierung, Soll-Versteuerung), SKR03/SKR04, Buchungsjournal, Kontenblätter, manuelle
   Buchungen, Anlagenverzeichnis mit AfA (linear, GWG, Sammelposten), Festschreibung.

@@ -216,6 +216,30 @@ pub fn normalize_iban(s: &str) -> String {
     s.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_uppercase()
 }
 
+/// Format and check digits (ISO 13616, mod 97) of an IBAN.
+pub fn iban_valid(s: &str) -> bool {
+    let n = normalize_iban(s);
+    if n.len() < 15 || n.len() > 34 || !n.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return false;
+    }
+    let (head, rest) = n.split_at(4);
+    if !head[..2].chars().all(|c| c.is_ascii_uppercase()) || !head[2..].chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    let mut rem: u32 = 0;
+    for c in rest.chars().chain(head.chars()) {
+        let d = c.to_digit(36).unwrap_or(0);
+        rem = if d < 10 { (rem * 10 + d) % 97 } else { (rem * 100 + d) % 97 };
+    }
+    rem == 1
+}
+
+/// BIC with 8 or 11 characters (ISO 9362).
+pub fn bic_valid(s: &str) -> bool {
+    let b = normalize_iban(s);
+    (b.len() == 8 || b.len() == 11) && b[..6].chars().all(|c| c.is_ascii_uppercase()) && b[6..].chars().all(|c| c.is_ascii_alphanumeric())
+}
+
 pub fn format_iban(s: &str) -> String {
     let n = normalize_iban(s);
     n.as_bytes().chunks(4).map(|c| String::from_utf8_lossy(c).to_string()).collect::<Vec<_>>().join(" ")

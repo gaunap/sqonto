@@ -151,7 +151,18 @@ pub fn load(conn: &Connection) -> Result<()> {
         org("Deutsche Bahn AG", "Europaplatz 1", "10557", "Berlin", "", false),
         org("Apple Distribution International", "Hollyhill Industrial Estate", "T23", "Cork", "", false),
     ];
+    // Example IBANs (valid check digits) so that SEPA transfers work in the demo.
+    let ibans = [
+        ("Telekom", "DE55200400000400880000"),
+        ("Hetzner", "DE61760501010012345678"),
+        ("Büromarkt", "DE34200505501234567890"),
+        ("Petersen", "DE07200505500009876543"),
+        ("Klein", "DE50380700590123456700"),
+    ];
     for mut c in sup {
+        if let Some((_, iban)) = ibans.iter().find(|(n, _)| c.company.contains(n)) {
+            c.iban = (*iban).into();
+        }
         if c.company.contains("Ireland") || c.company.contains("Apple") {
             c.country = "IE".into();
             c.vat_id = if c.company.contains("Adobe") { "IE6364992H".into() } else { "IE9700053D".into() };
@@ -178,6 +189,10 @@ pub fn load(conn: &Connection) -> Result<()> {
     }
 
     let bank_id: i64 = conn.query_row("SELECT id FROM payment_accounts WHERE kind != 'cash' ORDER BY id LIMIT 1", [], |r| r.get(0))?;
+    conn.execute(
+        "UPDATE payment_accounts SET iban = ?1, bic = ?2, bank_name = ?3 WHERE id = ?4 AND iban = ''",
+        rusqlite::params![s.company.iban, s.company.bic, s.company.bank_name, bank_id],
+    )?;
     let cash_id: Option<i64> = conn.query_row("SELECT id FROM payment_accounts WHERE kind = 'cash' ORDER BY id LIMIT 1", [], |r| r.get(0)).ok();
 
     let line_from = |a: &Article, qty: Decimal| DocumentLine {
