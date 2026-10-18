@@ -366,7 +366,7 @@ pub fn update(conn: &Connection, id: i64, input: TransactionInput) -> Result<()>
     tx.import_hash = old.import_hash.clone();
     tx.source = old.source.clone();
     tx.reversal_of = old.reversal_of;
-    if old.source == "import" || acc.kind == "cash" {
+    if old.source == "import" || old.source.starts_with("import-") || acc.kind == "cash" {
         // Imported bank data and cash entries are immutable – only the assignment may change
         // (cash entries are corrected by a Stornobuchung).
         tx.amount = old.amount;

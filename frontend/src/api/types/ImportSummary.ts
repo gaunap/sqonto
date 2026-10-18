@@ -12,4 +12,8 @@ locked: number, auto_matched: number,
 /**
  * Booked by a Bankregel.
  */
-rules_applied: number, };
+rules_applied: number, 
+/**
+ * Fees and transfers of provider reports, booked directly.
+ */
+booked: number, };

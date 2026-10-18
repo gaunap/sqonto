@@ -8,4 +8,16 @@ export type ImportedTx = { date: string, amount: number, counterparty: string, i
 /**
  * Dated within the festgeschriebenen period – cannot be imported.
  */
-locked: boolean, };
+locked: boolean, 
+/**
+ * Booked to this account right away (fees and transfers in provider reports).
+ */
+account: string, 
+/**
+ * "" | fee | transit
+ */
+kind: string, 
+/**
+ * Payment service provider of the report (paypal, stripe, sumup, psp); empty for bank data.
+ */
+provider: string, };

@@ -178,6 +178,8 @@ function ManualTxModal({ opened, onClose, accountId }: { opened: boolean; onClos
   );
 }
 
+const PROVIDERS: Record<string, string> = { paypal: 'PayPal-Bericht', stripe: 'Stripe-Bericht', sumup: 'SumUp-Bericht', psp: 'Bericht eines Zahlungsdienstleisters' };
+
 function ImportModal({ opened, onClose, accounts, defaultAccount }: { opened: boolean; onClose: () => void; accounts: PaymentAccountView[]; defaultAccount: number | null }) {
   const [step, setStep] = useState(0);
   const [acc, setAcc] = useState<string | null>(null);
@@ -249,10 +251,15 @@ function ImportModal({ opened, onClose, accounts, defaultAccount }: { opened: bo
       </Stepper>
       {step === 0 && (
         <Stack>
-          <Select label="Bankkonto" data={banks.map((a) => ({ value: String(a.account.id), label: a.account.name }))} value={acc} onChange={setAcc} />
+          <Select label="Konto" data={banks.map((a) => ({ value: String(a.account.id), label: a.account.name }))} value={acc} onChange={setAcc} />
           <FileInput label="Datei" placeholder="Umsätze als CSV (Excel) oder CAMT.053 (XML) auswählen" accept=".csv,.txt,.xml,.camt" value={file} onChange={setFile} leftSection={<IconUpload size={16} />} />
           <Text size="xs" c="dimmed">
             Unterstützt werden die CSV-Exporte gängiger Banken (Sparkasse, Volksbank, ING, DKB, Commerzbank, Deutsche Bank, N26 …) sowie das ISO-20022-Format CAMT.053. Doppelte Umsätze werden automatisch erkannt.
+          </Text>
+          <Text size="xs" c="dimmed">
+            Berichte von Zahlungsdienstleistern (PayPal-Aktivitäten, Stripe-Saldobericht, SumUp-Transaktionen mit Gebühr und Netto) bitte in ein eigenes Konto der Art „PayPal / Sonstige“ importieren: Jede Zahlung wird
+            mit ihrer Gebühr getrennt übernommen, Gebühren und Auszahlungen an die Bank werden direkt gebucht (Nebenkosten des Geldverkehrs bzw. Geldtransit). Der Zahlungseingang auf dem Bankkonto wird dann ebenfalls
+            automatisch als Geldtransit gebucht.
           </Text>
           {error && <Alert color="red">{error}</Alert>}
           <Group justify="flex-end">
@@ -291,6 +298,11 @@ function ImportModal({ opened, onClose, accounts, defaultAccount }: { opened: bo
             </Alert>
           ))}
           <Group gap="sm">
+            {PROVIDERS[preview.format] && (
+              <Badge size="lg" variant="filled" color="grape">
+                {PROVIDERS[preview.format]}
+              </Badge>
+            )}
             <Badge size="lg" variant="light">
               {preview.transactions.length} Umsätze erkannt
             </Badge>
@@ -321,9 +333,16 @@ function ImportModal({ opened, onClose, accounts, defaultAccount }: { opened: bo
                     <Table.Td>{date(t.date)}</Table.Td>
                     <Table.Td>{t.counterparty}</Table.Td>
                     <Table.Td>
-                      <Text size="xs" lineClamp={1}>
-                        {t.purpose}
-                      </Text>
+                      <Group gap={6} wrap="nowrap">
+                        {t.kind && (
+                          <Badge size="xs" variant="light" color={t.kind === 'fee' ? 'orange' : 'gray'} style={{ flexShrink: 0 }}>
+                            {t.kind === 'fee' ? 'Gebühr' : 'Geldtransit'}
+                          </Badge>
+                        )}
+                        <Text size="xs" lineClamp={1}>
+                          {t.purpose}
+                        </Text>
+                      </Group>
                     </Table.Td>
                     <Table.Td ta="right" className="tabular" c={t.amount < 0 ? 'red.7' : 'teal.7'}>
                       {money(t.amount)}
@@ -351,7 +370,8 @@ function ImportModal({ opened, onClose, accounts, defaultAccount }: { opened: bo
           </ThemeIcon>
           <Text fw={650}>{summary.imported} Umsätze importiert</Text>
           <Text size="sm" c="dimmed">
-            {summary.auto_matched} automatisch zugeordnet{summary.rules_applied > 0 && ` · ${summary.rules_applied} per Regel gebucht`} · {summary.skipped} Duplikate übersprungen
+            {summary.auto_matched} automatisch zugeordnet{summary.booked > 0 && ` · ${summary.booked} Gebühren und Transfers gebucht`}
+            {summary.rules_applied > 0 && ` · ${summary.rules_applied} per Regel gebucht`} · {summary.skipped} Duplikate übersprungen
             {summary.locked > 0 && ` · ${summary.locked} im festgeschriebenen Zeitraum nicht importiert`}
           </Text>
           <Button onClick={onClose}>Schließen</Button>

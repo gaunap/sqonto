@@ -3,7 +3,7 @@
 // See LICENSE in the project root for the full license and warranty disclaimer.
 
 //! Import von Kontoumsätzen: CSV (automatische Spaltenerkennung für gängige
-//! deutsche Banken) und CAMT.053 (ISO 20022).
+//! deutsche Banken), CAMT.053 (ISO 20022) und Berichte von Zahlungsdienstleistern (`psp`).
 
 use std::str::FromStr;
 
@@ -19,6 +19,7 @@ use crate::bail_user;
 use crate::db::{self, v};
 use crate::models::{PaymentAccount, Transaction};
 use crate::services::finance::{self, TransactionInput};
+use crate::services::psp;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
 #[serde(default)]
@@ -49,6 +50,15 @@ pub struct ImportedTx {
     /// Dated within the festgeschriebenen period – cannot be imported.
     #[serde(default)]
     pub locked: bool,
+    /// Booked to this account right away (fees and transfers in provider reports).
+    #[serde(default)]
+    pub account: String,
+    /// "" | fee | transit
+    #[serde(default)]
+    pub kind: String,
+    /// Payment service provider of the report (paypal, stripe, sumup, psp); empty for bank data.
+    #[serde(default)]
+    pub provider: String,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -137,7 +147,7 @@ fn find_col(headers: &[String], patterns: &[&str]) -> i64 {
     -1
 }
 
-fn split_rows(text: &str, delimiter: u8) -> Vec<Vec<String>> {
+pub(crate) fn split_rows(text: &str, delimiter: u8) -> Vec<Vec<String>> {
     let mut rdr = csv::ReaderBuilder::new().delimiter(delimiter).has_headers(false).flexible(true).from_reader(text.as_bytes());
     rdr.records().filter_map(|r| r.ok()).map(|r| r.iter().map(|c| c.trim().to_string()).collect()).collect()
 }
@@ -232,6 +242,9 @@ fn parse_csv(text: &str, mapping: Option<CsvMapping>) -> ImportPreview {
                     hash: String::new(),
                     duplicate: false,
                     locked: false,
+                    account: String::new(),
+                    kind: String::new(),
+                    provider: String::new(),
                 });
             }
             (cols, sample)
@@ -311,6 +324,9 @@ fn parse_camt(xml: &str) -> Result<ImportPreview> {
             hash: String::new(),
             duplicate: false,
             locked: false,
+            account: String::new(),
+            kind: String::new(),
+            provider: String::new(),
         });
     }
     if pending > 0 {
@@ -320,9 +336,22 @@ fn parse_camt(xml: &str) -> Result<ImportPreview> {
 }
 
 pub fn preview(conn: &Connection, account_id: i64, bytes: &[u8], mapping: Option<CsvMapping>) -> Result<ImportPreview> {
-    let _acc: PaymentAccount = db::get(conn, account_id)?;
+    let acc: PaymentAccount = db::get(conn, account_id)?;
     let text = decode(bytes);
-    let mut p = if text.trim_start().starts_with('<') { parse_camt(&text)? } else { parse_csv(&text, mapping) };
+    let chart = crate::services::settings::load(conn)?.tax.chart;
+    let mut p = if text.trim_start().starts_with('<') {
+        parse_camt(&text)?
+    } else if let Some(p) = mapping.is_none().then(|| psp::parse(&text, &crate::chart::role(&chart, "geldverkehr"), &crate::chart::role(&chart, "transit"))).flatten() {
+        p
+    } else {
+        parse_csv(&text, mapping)
+    };
+    if p.transactions.iter().any(|t| !t.provider.is_empty()) && acc.kind == "bank" {
+        p.errors.push(format!(
+            "Die Datei ist ein Bericht eines Zahlungsdienstleisters. Sie gehört in ein eigenes Konto der Art „PayPal / Sonstige“, nicht in das Bankkonto „{}“.",
+            acc.name
+        ));
+    }
     assign_hashes(account_id, &mut p.transactions);
     let locked_until = crate::services::settings::load(conn)?.tax.locked_until;
     for t in p.transactions.iter_mut() {
@@ -344,6 +373,8 @@ pub struct ImportSummary {
     pub auto_matched: i64,
     /// Booked by a Bankregel.
     pub rules_applied: i64,
+    /// Fees and transfers of provider reports, booked directly.
+    pub booked: i64,
 }
 
 pub fn import(conn: &Connection, account_id: i64, mut txs: Vec<ImportedTx>, auto_match: bool) -> Result<ImportSummary> {
@@ -354,9 +385,11 @@ pub fn import(conn: &Connection, account_id: i64, mut txs: Vec<ImportedTx>, auto
     if txs.iter().any(|t| t.hash.is_empty()) {
         assign_hashes(account_id, &mut txs);
     }
-    let locked_until = crate::services::settings::load(conn)?.tax.locked_until;
+    let settings = crate::services::settings::load(conn)?;
+    let locked_until = settings.tax.locked_until;
+    let transit = crate::chart::role(&settings.tax.chart, "transit");
     let rules: Vec<crate::models::BankRule> = crate::services::bankrules::list(conn)?.into_iter().filter(|r| r.active).collect();
-    let (mut imported, mut skipped, mut locked, mut matched, mut ruled) = (0, 0, 0, 0, 0);
+    let (mut imported, mut skipped, mut locked, mut matched, mut ruled, mut booked) = (0, 0, 0, 0, 0, 0);
     for t in txs {
         let h = t.hash.clone();
         if db::scalar_i64(conn, "SELECT COUNT(*) FROM transactions WHERE account_id = ?1 AND import_hash = ?2", &[v(account_id), v(h.clone())])? > 0 {
@@ -367,6 +400,18 @@ pub fn import(conn: &Connection, account_id: i64, mut txs: Vec<ImportedTx>, auto
             locked += 1;
             continue;
         }
+        // Payouts from and direct debits by a provider whose report is imported into another
+        // account are transfers between own accounts.
+        let preset = if !t.account.is_empty() {
+            t.account.clone()
+        } else if t.provider.is_empty()
+            && let Some(p) = psp::provider_of(&format!("{} {}", t.counterparty, t.purpose))
+            && db::scalar_i64(conn, "SELECT COUNT(*) FROM transactions WHERE source = ?1 AND account_id != ?2", &[v(format!("import-{p}")), v(account_id)])? > 0
+        {
+            transit.clone()
+        } else {
+            String::new()
+        };
         let tx = Transaction {
             account_id,
             date: t.date,
@@ -375,12 +420,20 @@ pub fn import(conn: &Connection, account_id: i64, mut txs: Vec<ImportedTx>, auto
             counterparty_iban: t.iban,
             purpose: t.purpose,
             import_hash: h,
-            source: "import".into(),
+            source: if t.provider.is_empty() { "import".into() } else { format!("import-{}", t.provider) },
             status: "open".into(),
             ..Default::default()
         };
         let id = finance::create(conn, TransactionInput { tx, allocations: vec![] })?;
         imported += 1;
+        if !preset.is_empty() {
+            let tx: Transaction = db::get(conn, id)?;
+            let description = if preset == transit { "Geldtransit".to_string() } else { tx.purpose.clone() };
+            let alloc = crate::models::Allocation { kind: "account".into(), account: preset, amount: tx.amount, date: tx.date, description, ..Default::default() };
+            finance::update(conn, id, TransactionInput { tx, allocations: vec![alloc] })?;
+            booked += 1;
+            continue;
+        }
         if auto_match {
             // Only unambiguous matches (number in purpose and exact amount) are assigned automatically.
             let sug = finance::suggestions(conn, id)?;
@@ -407,7 +460,7 @@ pub fn import(conn: &Connection, account_id: i64, mut txs: Vec<ImportedTx>, auto
             ruled += 1;
         }
     }
-    Ok(ImportSummary { imported, skipped, locked, auto_matched: matched, rules_applied: ruled })
+    Ok(ImportSummary { imported, skipped, locked, auto_matched: matched, rules_applied: ruled, booked })
 }
 
 #[cfg(test)]
@@ -486,6 +539,57 @@ mod tests {
         assert_eq!(got, vec![(dec!(119), "RE-1"), (dec!(-119), "Rückbuchung: Lastschrift RE-1")]);
         assert_eq!(p.errors.len(), 2, "{:?}", p.errors);
         assert!(p.errors[0].contains("USD") && p.errors[1].contains("1 vorgemerkte"));
+    }
+
+    #[test]
+    fn provider_report_books_fees_and_transfers() {
+        use crate::models::{Document, DocumentLine};
+        use crate::services::documents::{self, DocumentInput};
+        let (conn, bank) = setup();
+        crate::services::settings::seed_test_company(&conn);
+        let paypal = finance::save_account(
+            &conn,
+            PaymentAccount { name: "PayPal".into(), kind: "other".into(), ledger_account: "1220".into(), opening_date: crate::util::ymd(2026, 1, 1), ..Default::default() },
+        )
+        .unwrap();
+        let doc = Document { doc_type: "invoice".into(), address: "Kunde AG\nWeg 1\n12345 Stadt".into(), tax_mode: "standard".into(), date: crate::util::ymd(2026, 3, 1), ..Default::default() };
+        let line = DocumentLine { line_type: "item".into(), name: "Beratung".into(), quantity: dec!(1), unit_price: dec!(1000), tax_rate: dec!(19), ..Default::default() };
+        let id = documents::create(&conn, DocumentInput { doc, lines: vec![line] }).unwrap();
+        let number = documents::finalize(&conn, id).unwrap().number;
+
+        let report = format!(
+            "\"Datum\",\"Uhrzeit\",\"Zeitzone\",\"Name\",\"Typ\",\"Status\",\"Währung\",\"Brutto\",\"Gebühr\",\"Netto\",\"Transaktionscode\",\"Rechnungsnummer\",\"Auswirkung auf Guthaben\"\n\
+             \"02.03.2026\",\"10:00:00\",\"CET\",\"Kunde AG\",\"Website-Zahlung\",\"Abgeschlossen\",\"EUR\",\"1.190,00\",\"-41,90\",\"1.148,10\",\"1AB\",\"{number}\",\"Haben\"\n\
+             \"04.03.2026\",\"09:00:00\",\"CET\",\"\",\"Allgemeine Abbuchung – Bankkonto\",\"Abgeschlossen\",\"EUR\",\"-1.000,00\",\"0,00\",\"-1.000,00\",\"2AB\",\"\",\"Soll\"\n"
+        );
+        let p = preview(&conn, paypal, report.as_bytes(), None).unwrap();
+        assert_eq!(p.format, "paypal");
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        let s = import(&conn, paypal, p.transactions, true).unwrap();
+        assert_eq!((s.imported, s.auto_matched, s.booked), (3, 1, 2));
+        let inv: Document = db::get(&conn, id).unwrap();
+        assert_eq!(inv.status, "paid");
+
+        // The same report in the bank account is flagged.
+        let wrong = preview(&conn, bank, report.as_bytes(), None).unwrap();
+        assert!(wrong.errors.iter().any(|e| e.contains("Zahlungsdienstleister")));
+
+        // The payout arrives at the bank: Geldtransit as well.
+        let statement = "Buchungstag;Name Zahlungsbeteiligter;Verwendungszweck;Betrag\n05.03.2026;PayPal Europe S.a.r.l. et Cie S.C.A;Abbuchung 2AB;1.000,00\n";
+        let p = preview(&conn, bank, statement.as_bytes(), None).unwrap();
+        let s = import(&conn, bank, p.transactions, true).unwrap();
+        assert_eq!(s.booked, 1);
+
+        let mut bal: std::collections::HashMap<String, Decimal> = Default::default();
+        for l in crate::services::reports::raw_lines(&conn, None, None).unwrap() {
+            *bal.entry(l.account).or_default() += l.debit - l.credit;
+        }
+        let get = |a: &str| bal.get(a).copied().unwrap_or_default();
+        assert_eq!(get("1360"), dec!(0), "Geldtransit is cleared");
+        assert_eq!(get("1220"), dec!(148.10), "PayPal balance");
+        assert_eq!(get("1200"), dec!(1000), "bank");
+        assert_eq!(get("4970"), dec!(41.90), "fee without VAT");
+        assert!(db::scalar_i64(&conn, "SELECT COUNT(*) FROM transactions WHERE status = 'open'", &[]).unwrap() == 0);
     }
 
     #[test]

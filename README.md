@@ -18,7 +18,8 @@ Projektwebsite: [sqonto.de](https://sqonto.de).
   Gebühren und Verzugszinsen, Mahnlauf, GiroCode auf Rechnungen und Mahnungen.
 - **Einkauf:** Belegerfassung (Upload, Kategorisierung, Aufteilung nach Steuersätzen, § 13b),
   Lieferanten automatisch aus E-Rechnungen anlegen.
-- **Bank & Kasse:** CSV- und CAMT-Import mit automatischer Zuordnung, Zahlungen, Skonto,
+- **Bank & Kasse:** CSV- und CAMT-Import mit automatischer Zuordnung, Import der Berichte von
+  PayPal, Stripe und SumUp (Gebühren und Auszahlungen werden gebucht), Zahlungen, Skonto,
   Ausbuchungen, SEPA-Überweisungsdateien (pain.001) für offene Belege, GoBD-konformes Kassenbuch
   mit Stornobuchungen.
 - **Buchhaltung:** Einnahmen-Überschuss-Rechnung (Ist-Versteuerung) oder doppelte Buchführung

@@ -20,6 +20,7 @@ pub mod finance;
 pub mod gdpdu;
 pub mod masterdata;
 pub mod posting;
+pub mod psp;
 pub mod receipts;
 pub mod recurring;
 pub mod reports;
