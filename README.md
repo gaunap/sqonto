@@ -150,8 +150,8 @@ Für einen Release:
 
 1. Dieselbe Version `X.Y.Z` in `backend/Cargo.toml` und `frontend/package.json` setzen,
    die Lockdateien aktualisieren und die Änderungen committen.
-2. Den Tag `vX.Y.Z` erstellen und zu GitHub pushen, z. B. `git tag v0.9.2` und
-   `git push origin v0.9.2`.
+2. Den Tag `vX.Y.Z` erstellen und zu GitHub pushen, z. B. `git tag v0.9.3` und
+   `git push origin v0.9.3`.
 3. Nach erfolgreichen Builds aller Plattformen veröffentlicht die Pipeline automatisch
    einen GitHub Release mit Windows-Installer, Windows-ZIP, Linux/macOS-Archiven,
    SHA-256-Prüfsummen und automatisch erzeugten Release Notes. Der Tag muss exakt zur
