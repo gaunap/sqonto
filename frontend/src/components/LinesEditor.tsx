@@ -40,6 +40,7 @@ import type { Article, Document, DocumentLine } from '@/api/types';
 import { calculate } from '@/lib/calc';
 import { money, qty as fmtQty } from '@/lib/format';
 import { TAX_RATES, UNITS } from '@/lib/labels';
+import { ArticleModal } from './ArticleModal';
 import { DecimalInput, MoneyInput } from './inputs';
 
 export type EditorLine = DocumentLine & { _key: string };
@@ -95,17 +96,40 @@ export function lineFromArticle(a: Article, base?: Partial<EditorLine>): Partial
   };
 }
 
-function ArticleNameInput({ value, onChange, onPick, articles, readOnly }: { value: string; onChange: (v: string) => void; onPick: (a: Article) => void; articles: Article[]; readOnly?: boolean }) {
+const CREATE_ARTICLE = 'create-article';
+
+function ArticleNameInput({
+  value,
+  onChange,
+  onPick,
+  onCreate,
+  articles,
+  readOnly,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onPick: (a: Article) => void;
+  onCreate: (name: string) => void;
+  articles: Article[];
+  readOnly?: boolean;
+}) {
   const combobox = useCombobox({ onDropdownClose: () => combobox.resetSelectedOption() });
   const q = value.trim().toLowerCase();
   const filtered = useMemo(
     () => (q.length === 0 ? articles.slice(0, 8) : articles.filter((a) => `${a.name} ${a.number} ${a.category}`.toLowerCase().includes(q)).slice(0, 8)),
     [q, articles],
   );
+  // Offered for a name the catalog does not have yet.
+  const canCreate = q.length > 0 && !articles.some((a) => a.name.trim().toLowerCase() === q);
   return (
     <Combobox
       store={combobox}
       onOptionSubmit={(id) => {
+        if (id === CREATE_ARTICLE) {
+          onCreate(value.trim());
+          combobox.closeDropdown();
+          return;
+        }
         const a = articles.find((x) => String(x.id) === id);
         if (a) onPick(a);
         combobox.closeDropdown();
@@ -129,13 +153,15 @@ function ArticleNameInput({ value, onChange, onPick, articles, readOnly }: { val
           styles={{ input: { fontWeight: 600 } }}
         />
       </Combobox.Target>
-      {filtered.length > 0 && !readOnly && (
+      {(filtered.length > 0 || canCreate) && !readOnly && (
         <Combobox.Dropdown>
-          <Combobox.Header>
-            <Text size="xs" c="dimmed">
-              Aus Produkten & Leistungen übernehmen
-            </Text>
-          </Combobox.Header>
+          {filtered.length > 0 && (
+            <Combobox.Header>
+              <Text size="xs" c="dimmed">
+                Aus Produkten & Leistungen übernehmen
+              </Text>
+            </Combobox.Header>
+          )}
           <Combobox.Options mah={300} style={{ overflowY: 'auto' }}>
             {filtered.map((a) => (
               <Combobox.Option value={String(a.id)} key={a.id}>
@@ -154,6 +180,16 @@ function ArticleNameInput({ value, onChange, onPick, articles, readOnly }: { val
                 </Group>
               </Combobox.Option>
             ))}
+            {canCreate && (
+              <Combobox.Option value={CREATE_ARTICLE}>
+                <Group gap="xs" wrap="nowrap">
+                  <IconPlus size={14} />
+                  <Text size="sm" truncate>
+                    „{value.trim()}“ als neues Produkt / neue Leistung anlegen …
+                  </Text>
+                </Group>
+              </Combobox.Option>
+            )}
           </Combobox.Options>
         </Combobox.Dropdown>
       )}
@@ -179,6 +215,7 @@ interface RowProps {
 function LineRow({ line, pos, amount, doc, showDiscount, articles, onChange, onRemove, onDuplicate, onInsertText, readOnly }: RowProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: line._key, disabled: readOnly });
   const [showDesc, setShowDesc] = useState(line.description.length > 0);
+  const [newArticle, setNewArticle] = useState<string | null>(null);
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -188,6 +225,10 @@ function LineRow({ line, pos, amount, doc, showDiscount, articles, onChange, onR
     zIndex: isDragging ? 2 : undefined,
   };
   const taxEditable = doc.tax_mode === 'standard';
+  const applyArticle = (a: Article) => {
+    onChange(lineFromArticle(a));
+    if (a.description) setShowDesc(true);
+  };
   const handle = (
     <ActionIcon variant="transparent" className="drag-handle" {...attributes} {...listeners} aria-label="Position verschieben">
       <IconGripVertical size={16} />
@@ -288,10 +329,19 @@ function LineRow({ line, pos, amount, doc, showDiscount, articles, onChange, onR
             articles={articles}
             readOnly={readOnly}
             onChange={(v) => onChange({ name: v })}
-            onPick={(a) => {
-              onChange(lineFromArticle(a));
-              if (a.description) setShowDesc(true);
+            onPick={applyArticle}
+            onCreate={setNewArticle}
+          />
+          <ArticleModal
+            opened={newArticle !== null}
+            onClose={() => setNewArticle(null)}
+            article={null}
+            initial={{
+              name: newArticle ?? '',
+              // What was already entered on the line carries over.
+              ...(line.unit_price > 0 ? { price: line.unit_price, unit: line.unit, tax_rate: line.tax_rate } : {}),
             }}
+            onSaved={applyArticle}
           />
           {(showDesc || line.description) && (
             <Textarea placeholder="Beschreibung (optional)" size="xs" minRows={1} value={line.description} onChange={(e) => onChange({ description: e.currentTarget.value })} readOnly={readOnly} />
