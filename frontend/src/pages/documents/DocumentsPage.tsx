@@ -8,6 +8,7 @@ import { ActionIcon, Badge, Button, Card, Group, Menu, SegmentedControl, Stack, 
 import { DatePickerInput } from '@mantine/dates';
 import {
   IconCalendar,
+  IconCopy,
   IconDots,
   IconDownload,
   IconExternalLink,
@@ -20,9 +21,9 @@ import {
   IconBellRinging,
 } from '@tabler/icons-react';
 import dayjs from 'dayjs';
-import { downloadFile, openFile } from '@/api/client';
-import { notifyError, useApi } from '@/api/hooks';
-import type { DocumentListItem } from '@/api/types';
+import { api, downloadFile, openFile } from '@/api/client';
+import { notifyError, useAction, useApi } from '@/api/hooks';
+import type { DocumentListItem, IdResponse } from '@/api/types';
 import { ListTable } from '@/components/ListTable';
 import { RecurringDrawer } from '@/components/Recurring';
 import { Empty, Page, PageHeader, StatPill, StatusBadge } from '@/components/ui';
@@ -69,6 +70,7 @@ const STATUS_TABS: Record<DocType, { value: string; label: string }[]> = {
 export function DocumentsPage({ docType }: { docType: DocType }) {
   const meta = DOC_TYPES[docType];
   const navigate = useNavigate();
+  const duplicate = useAction((id: number) => api.post<IdResponse>(`/documents/${id}/copy`), { success: 'Kopie erstellt', onSuccess: (r) => navigate(`/dokumente/${r.id}/bearbeiten`) });
   const [params, setParams] = useSearchParams();
   const status = params.get('status') ?? 'all';
   const [q, setQ] = useState('');
@@ -321,6 +323,9 @@ export function DocumentsPage({ docType }: { docType: DocType }) {
                             PDF öffnen
                           </Menu.Item>
                           <Menu.Item onClick={() => navigate(`/dokumente/${d.id}`)}>Details anzeigen</Menu.Item>
+                          <Menu.Item leftSection={<IconCopy size={14} />} onClick={() => duplicate.mutate(d.id)}>
+                            Duplizieren
+                          </Menu.Item>
                           {d.contact_id && <Menu.Item onClick={() => navigate(`/kontakte/${d.contact_id}`)}>Kontakt öffnen</Menu.Item>}
                         </Menu.Dropdown>
                       </Menu>
