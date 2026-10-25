@@ -230,6 +230,7 @@ export function DocumentsPage({ docType }: { docType: DocType }) {
                   ),
                 },
                 { accessor: 'contact_name', title: 'Kunde', sortable: true, ellipsis: true },
+                ...(docType === 'quote' ? [{ accessor: 'title', title: 'Titel', sortable: true, ellipsis: true, visibleMediaQuery: '(min-width: 48em)' }] : []),
                 { accessor: 'date', title: 'Datum', sortable: true, render: (d) => date(d.date), width: 110 },
                 ...(isInvoiceLike
                   ? [
