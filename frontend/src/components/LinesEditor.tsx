@@ -215,7 +215,7 @@ interface RowProps {
 function LineRow({ line, pos, amount, doc, showDiscount, articles, onChange, onRemove, onDuplicate, onInsertText, readOnly }: RowProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: line._key, disabled: readOnly });
   const [showDesc, setShowDesc] = useState(line.description.length > 0);
-  const [newArticle, setNewArticle] = useState<string | null>(null);
+  const [articleDraft, setArticleDraft] = useState<Partial<Article> | null>(null);
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -225,6 +225,13 @@ function LineRow({ line, pos, amount, doc, showDiscount, articles, onChange, onR
     zIndex: isDragging ? 2 : undefined,
   };
   const taxEditable = doc.tax_mode === 'standard';
+  // What was already entered on the line carries over into the new article.
+  const draftFromLine = (name: string): Partial<Article> => ({
+    name,
+    description: line.description,
+    revenue_account: line.account,
+    ...(line.unit_price > 0 ? { price: line.unit_price, unit: line.unit, tax_rate: line.tax_rate } : {}),
+  });
   const applyArticle = (a: Article) => {
     onChange(lineFromArticle(a));
     if (a.description) setShowDesc(true);
@@ -245,6 +252,11 @@ function LineRow({ line, pos, amount, doc, showDiscount, articles, onChange, onR
         {line.line_type === 'item' && (
           <Menu.Item leftSection={<IconTextPlus size={16} />} onClick={() => setShowDesc((s) => !s)}>
             {showDesc ? 'Beschreibung ausblenden' : 'Beschreibung hinzufügen'}
+          </Menu.Item>
+        )}
+        {line.line_type === 'item' && !line.article_id && line.name.trim() && (
+          <Menu.Item leftSection={<IconPackage size={16} />} onClick={() => setArticleDraft(draftFromLine(line.name.trim()))}>
+            Als Produkt / Leistung speichern
           </Menu.Item>
         )}
         <Menu.Item leftSection={<IconCopy size={16} />} onClick={onDuplicate}>
@@ -330,17 +342,13 @@ function LineRow({ line, pos, amount, doc, showDiscount, articles, onChange, onR
             readOnly={readOnly}
             onChange={(v) => onChange({ name: v })}
             onPick={applyArticle}
-            onCreate={setNewArticle}
+            onCreate={(name) => setArticleDraft(draftFromLine(name))}
           />
           <ArticleModal
-            opened={newArticle !== null}
-            onClose={() => setNewArticle(null)}
+            opened={articleDraft !== null}
+            onClose={() => setArticleDraft(null)}
             article={null}
-            initial={{
-              name: newArticle ?? '',
-              // What was already entered on the line carries over.
-              ...(line.unit_price > 0 ? { price: line.unit_price, unit: line.unit, tax_rate: line.tax_rate } : {}),
-            }}
+            initial={articleDraft ?? {}}
             onSaved={applyArticle}
           />
           {(showDesc || line.description) && (
