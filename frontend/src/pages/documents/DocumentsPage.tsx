@@ -17,6 +17,7 @@ import {
   IconRepeat,
   IconPlus,
   IconSearch,
+  IconTrash,
   IconFileInvoice,
   IconBellRinging,
 } from '@tabler/icons-react';
@@ -26,7 +27,7 @@ import { notifyError, useAction, useApi } from '@/api/hooks';
 import type { DocumentListItem, IdResponse } from '@/api/types';
 import { ListTable } from '@/components/ListTable';
 import { RecurringDrawer } from '@/components/Recurring';
-import { Empty, Page, PageHeader, StatPill, StatusBadge } from '@/components/ui';
+import { Empty, Page, PageHeader, StatPill, StatusBadge, confirmAction } from '@/components/ui';
 import { exportCsv } from '@/lib/csv';
 import { date, money, relativeDays } from '@/lib/format';
 import { DOC_TYPES, docLabel, statusInfo, type DocType } from '@/lib/labels';
@@ -70,6 +71,7 @@ const STATUS_TABS: Record<DocType, { value: string; label: string }[]> = {
 export function DocumentsPage({ docType }: { docType: DocType }) {
   const meta = DOC_TYPES[docType];
   const navigate = useNavigate();
+  const remove = useAction((id: number) => api.del(`/documents/${id}`), { success: 'Dokument gelöscht' });
   const duplicate = useAction((id: number) => api.post<IdResponse>(`/documents/${id}/copy`), { success: 'Kopie erstellt', onSuccess: (r) => navigate(`/dokumente/${r.id}/bearbeiten`) });
   const [params, setParams] = useSearchParams();
   const status = params.get('status') ?? 'all';
@@ -326,6 +328,26 @@ export function DocumentsPage({ docType }: { docType: DocType }) {
                           <Menu.Item leftSection={<IconCopy size={14} />} onClick={() => duplicate.mutate(d.id)}>
                             Duplizieren
                           </Menu.Item>
+                          {!isInvoiceLike && (
+                            <>
+                              <Menu.Divider />
+                              <Menu.Item
+                                leftSection={<IconTrash size={14} />}
+                                color="red"
+                                onClick={() =>
+                                  confirmAction({
+                                    title: 'Dokument löschen',
+                                    message: `${docLabel(d.doc_type, d.kind)} ${d.number || d.title} wirklich löschen?`,
+                                    confirmLabel: 'Löschen',
+                                    danger: true,
+                                    onConfirm: () => remove.mutate(d.id),
+                                  })
+                                }
+                              >
+                                Löschen
+                              </Menu.Item>
+                            </>
+                          )}
                           {d.contact_id && <Menu.Item onClick={() => navigate(`/kontakte/${d.contact_id}`)}>Kontakt öffnen</Menu.Item>}
                         </Menu.Dropdown>
                       </Menu>
