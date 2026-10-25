@@ -24,7 +24,7 @@ use sqonto::Launch;
 use serde::{Deserialize, Serialize};
 use tao::dpi::{LogicalSize, PhysicalPosition};
 use tao::event::{Event, WindowEvent};
-use tao::event_loop::{ControlFlow, EventLoop, EventLoopBuilder, EventLoopWindowTarget};
+use tao::event_loop::{ControlFlow, EventLoop, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget};
 use tao::window::{Icon, ResizeDirection, Window, WindowBuilder, WindowId};
 use wry::{NewWindowResponse, WebContext, WebView, WebViewBuilder};
 
@@ -43,6 +43,8 @@ enum UserEvent {
     Downloaded(PathBuf),
     /// An update was installed: end, the new version starts itself.
     Quit,
+    /// Cmd+Q: closes the main window like its close button does (unsaved changes are asked for).
+    CloseMain,
     /// Title bar of the page: minimize, maximize, close, drag, resize-<edge>, state.
     WindowCommand(String),
 }
@@ -88,9 +90,9 @@ fn main() {
 
 fn run(dir: &Path, app_url: String, start_url: String) -> ! {
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
-    #[cfg(target_os = "macos")]
-    let _menu = macos_menu();
     let proxy = event_loop.create_proxy();
+    #[cfg(target_os = "macos")]
+    let _menu = macos_menu(proxy.clone());
     let focus_proxy = Mutex::new(proxy.clone());
     sqonto::set_focus_handler(move || {
         if let Ok(p) = focus_proxy.lock() {
@@ -151,16 +153,9 @@ fn run(dir: &Path, app_url: String, start_url: String) -> ! {
                     popups.remove(&window_id);
                     return;
                 }
-                let p = proxy.clone();
-                if webview.evaluate_script_with_callback(UNSAVED_JS, move |r| {
-                    let _ = p.send_event(UserEvent::CloseCheck(r));
-                })
-                .is_err()
-                {
-                    save_state(&window, &state_file);
-                    *control_flow = ControlFlow::Exit;
-                }
+                request_close(&window, &webview, &proxy, &state_file, control_flow);
             }
+            Event::UserEvent(UserEvent::CloseMain) => request_close(&window, &webview, &proxy, &state_file, control_flow),
             Event::WindowEvent { window_id, event: WindowEvent::Resized(_) | WindowEvent::Focused(_), .. } if CUSTOM_TITLEBAR && window_id == window.id() => {
                 send_window_state(&window, &webview);
             }
@@ -234,11 +229,34 @@ fn run(dir: &Path, app_url: String, start_url: String) -> ! {
     })
 }
 
+/// Asks the page for unsaved changes (answered by `CloseCheck`); without a page the app ends at once.
+fn request_close(window: &Window, webview: &WebView, proxy: &EventLoopProxy<UserEvent>, state_file: &Path, control_flow: &mut ControlFlow) {
+    let p = proxy.clone();
+    if webview
+        .evaluate_script_with_callback(UNSAVED_JS, move |r| {
+            let _ = p.send_event(UserEvent::CloseCheck(r));
+        })
+        .is_err()
+    {
+        save_state(window, state_file);
+        *control_flow = ControlFlow::Exit;
+    }
+}
+
 /// The WebView only handles Cmd+C/V/X/A/Z when the menu bar has the matching items.
 #[cfg(target_os = "macos")]
-fn macos_menu() -> muda::Menu {
-    use muda::{Menu, PredefinedMenuItem, Submenu};
+fn macos_menu(proxy: EventLoopProxy<UserEvent>) -> muda::Menu {
+    use muda::{accelerator::{Accelerator, Code, Modifiers}, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
     let menu = Menu::new();
+    // Not the predefined item: it would end the process without the unsaved-changes check.
+    let quit = MenuItem::new("Sqonto beenden", true, Some(Accelerator::new(Some(Modifiers::META), Code::KeyQ)));
+    let quit_id = quit.id().clone();
+    let proxy = Mutex::new(proxy);
+    MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+        if event.id == quit_id && let Ok(p) = proxy.lock() {
+            let _ = p.send_event(UserEvent::CloseMain);
+        }
+    }));
     let app = Submenu::new("Sqonto", true);
     let edit = Submenu::new("Bearbeiten", true);
     let window = Submenu::new("Fenster", true);
@@ -252,7 +270,7 @@ fn macos_menu() -> muda::Menu {
         &PredefinedMenuItem::hide_others(None),
         &PredefinedMenuItem::show_all(None),
         &PredefinedMenuItem::separator(),
-        &PredefinedMenuItem::quit(None),
+        &quit,
     ]);
     let _ = edit.append_items(&[
         &PredefinedMenuItem::undo(None),
