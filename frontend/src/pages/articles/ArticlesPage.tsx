@@ -4,131 +4,16 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { ActionIcon, Autocomplete, Badge, Button, Card, Grid, Group, Menu, Modal, SegmentedControl, Select, Stack, Switch, Text, TextInput, Textarea } from '@mantine/core';
-import { useForm } from '@mantine/form';
+import { ActionIcon, Badge, Button, Card, Group, Menu, SegmentedControl, Stack, Text, TextInput } from '@mantine/core';
 import { IconDots, IconEdit, IconFileExport, IconPackage, IconPlus, IconSearch, IconTrash } from '@tabler/icons-react';
 import { api } from '@/api/client';
 import { useAction, useApi } from '@/api/hooks';
 import type { Article, ArticleListItem } from '@/api/types';
-import { AccountSelect, DecimalInput, MoneyInput } from '@/components/inputs';
+import { ArticleModal } from '@/components/ArticleModal';
 import { ListTable } from '@/components/ListTable';
 import { Empty, Page, PageHeader, confirmAction } from '@/components/ui';
 import { exportCsv } from '@/lib/csv';
 import { money, qty } from '@/lib/format';
-import { TAX_RATES, UNITS } from '@/lib/labels';
-
-function emptyArticle(): Article {
-  return {
-    id: 0,
-    number: '',
-    kind: 'service',
-    name: '',
-    description: '',
-    unit: 'Std',
-    price: 0,
-    purchase_price: 0,
-    tax_rate: 19,
-    revenue_account: '',
-    category: '',
-    gtin: '',
-    track_stock: false,
-    stock: 0,
-    archived: false,
-    created_at: '',
-    updated_at: '',
-  };
-}
-
-export function ArticleModal({ opened, onClose, article }: { opened: boolean; onClose: () => void; article: Article | null }) {
-  const form = useForm<Article>({ initialValues: article ?? emptyArticle() });
-  const { data: all } = useApi<ArticleListItem[]>('/articles');
-  const categories = useMemo(() => [...new Set((all ?? []).map((a) => a.article.category).filter(Boolean))], [all]);
-  useEffect(() => {
-    if (opened) form.setValues(article ?? emptyArticle());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [opened, article?.id]);
-  const save = useAction((a: Article) => (a.id ? api.put(`/articles/${a.id}`, a) : api.post('/articles', a)), { success: 'Gespeichert', onSuccess: onClose });
-  const v = form.values;
-  const gross = Math.round(v.price * (1 + v.tax_rate / 100) * 100) / 100;
-  const margin = v.purchase_price > 0 && v.price > 0 ? ((v.price - v.purchase_price) / v.price) * 100 : null;
-  return (
-    <Modal opened={opened} onClose={onClose} size="lg" title={<Text fw={650}>{v.id ? 'Produkt / Leistung bearbeiten' : 'Neues Produkt / neue Leistung'}</Text>}>
-      <form onSubmit={form.onSubmit((values) => save.mutate(values))}>
-        <Stack gap="sm">
-          <SegmentedControl
-            value={v.kind}
-            onChange={(k) => {
-              form.setFieldValue('kind', k);
-              if (!v.id) form.setFieldValue('unit', k === 'service' ? 'Std' : 'Stk');
-            }}
-            data={[
-              { value: 'service', label: 'Dienstleistung' },
-              { value: 'product', label: 'Produkt' },
-            ]}
-          />
-          <Grid gap="sm">
-            <Grid.Col span={{ base: 12, sm: 8 }}>
-              <TextInput label="Bezeichnung" required data-autofocus {...form.getInputProps('name')} />
-            </Grid.Col>
-            <Grid.Col span={{ base: 12, sm: 4 }}>
-              <TextInput label="Artikelnummer" placeholder="automatisch" {...form.getInputProps('number')} />
-            </Grid.Col>
-            <Grid.Col span={12}>
-              <Textarea label="Beschreibung" description="Wird als zweite Zeile in Dokumenten übernommen" minRows={2} {...form.getInputProps('description')} />
-            </Grid.Col>
-            <Grid.Col span={{ base: 6, sm: 4 }}>
-              <MoneyInput label="Verkaufspreis netto" value={v.price} onChange={(x) => form.setFieldValue('price', x)} decimalScale={4} fixedDecimalScale={false} />
-            </Grid.Col>
-            <Grid.Col span={{ base: 6, sm: 4 }}>
-              <Select label="Umsatzsteuer" data={TAX_RATES} value={String(v.tax_rate)} onChange={(x) => form.setFieldValue('tax_rate', Number(x ?? 19))} />
-            </Grid.Col>
-            <Grid.Col span={{ base: 12, sm: 4 }}>
-              <Autocomplete label="Einheit" data={UNITS} {...form.getInputProps('unit')} />
-            </Grid.Col>
-            <Grid.Col span={12}>
-              <Text size="xs" c="dimmed">
-                Bruttopreis: {money(gross)}
-                {margin !== null && ` · Marge ${margin.toFixed(1)} %`}
-              </Text>
-            </Grid.Col>
-            <Grid.Col span={{ base: 6, sm: 4 }}>
-              <MoneyInput label="Einkaufspreis netto" value={v.purchase_price} onChange={(x) => form.setFieldValue('purchase_price', x)} />
-            </Grid.Col>
-            <Grid.Col span={{ base: 6, sm: 4 }}>
-              <Autocomplete label="Kategorie" data={categories} {...form.getInputProps('category')} />
-            </Grid.Col>
-            <Grid.Col span={{ base: 12, sm: 4 }}>
-              <TextInput label="GTIN / EAN" {...form.getInputProps('gtin')} />
-            </Grid.Col>
-            <Grid.Col span={12}>
-              <AccountSelect label="Erlöskonto" description="Leer = automatisch nach Steuersatz" picks={['revenue']} value={v.revenue_account} onChange={(x) => form.setFieldValue('revenue_account', x ?? '')} clearable allowDeselect />
-            </Grid.Col>
-            {v.kind === 'product' && (
-              <>
-                <Grid.Col span={{ base: 6 }}>
-                  <Switch mt="md" label="Lagerbestand führen" checked={v.track_stock} onChange={(e) => form.setFieldValue('track_stock', e.currentTarget.checked)} />
-                </Grid.Col>
-                {v.track_stock && (
-                  <Grid.Col span={{ base: 6 }}>
-                    <DecimalInput label="Bestand" value={v.stock} onChange={(x) => form.setFieldValue('stock', x)} />
-                  </Grid.Col>
-                )}
-              </>
-            )}
-          </Grid>
-          <Group justify="flex-end" mt="sm">
-            <Button variant="default" onClick={onClose}>
-              Abbrechen
-            </Button>
-            <Button type="submit" loading={save.isPending}>
-              Speichern
-            </Button>
-          </Group>
-        </Stack>
-      </form>
-    </Modal>
-  );
-}
 
 export function ArticlesPage() {
   const [params, setParams] = useSearchParams();
