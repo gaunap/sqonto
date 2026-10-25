@@ -138,6 +138,7 @@ function CompanyTab({ s, patch }: { s: Settings; patch: Patch }) {
                 label="Gläubiger-Identifikationsnummer"
                 placeholder="DE98ZZZ09999999999"
                 description="Bei der Deutschen Bundesbank zu beantragen; nötig, um Rechnungen per Lastschrift einzuziehen"
+                inputWrapperOrder={['label', 'input', 'description', 'error']}
                 value={s.debit.creditor_id}
                 onChange={(e) => {
                   const v = e.currentTarget.value;
@@ -151,6 +152,7 @@ function CompanyTab({ s, patch }: { s: Settings; patch: Patch }) {
                 min={1}
                 max={30}
                 description="14 Tage, sofern mit den Kunden keine kürzere Frist vereinbart ist (steht dann im Mandat)"
+                inputWrapperOrder={['label', 'input', 'description', 'error']}
                 value={s.debit.prenotification_days}
                 onChange={(v) => patch((x) => ({ ...x, debit: { ...x.debit, prenotification_days: Number(v) || 14 } }))}
               />

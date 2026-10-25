@@ -60,11 +60,11 @@ function MandateModal({ contact, existing, onClose }: { contact: Contact; existi
         <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
           <TextInput label="Mandatsreferenz" required maxLength={35} value={m.reference} onChange={(e) => set({ reference: e.currentTarget.value })} />
           <DateField label="Unterschrieben am" required value={m.signed_on} onChange={(v) => v && set({ signed_on: v })} maxDate={new Date()} />
-          <Select label="Art" data={SCHEMES} value={m.scheme} onChange={(v) => set({ scheme: v ?? 'CORE' })} allowDeselect={false} description={m.scheme === 'B2B' ? 'Nur für Konten von Unternehmen; kein Erstattungsanspruch, die Bank des Kunden muss das Mandat kennen' : 'Erstattung innerhalb von 8 Wochen möglich'} />
+          <Select label="Art" data={SCHEMES} value={m.scheme} onChange={(v) => set({ scheme: v ?? 'CORE' })} allowDeselect={false} inputWrapperOrder={['label', 'input', 'description', 'error']} description={m.scheme === 'B2B' ? 'Nur für Konten von Unternehmen; kein Erstattungsanspruch, die Bank des Kunden muss das Mandat kennen' : 'Erstattung innerhalb von 8 Wochen möglich'} />
           <Switch mt={28} label="Wiederkehrende Lastschriften" description={m.recurring ? undefined : 'Einmal-Mandat für eine einzige Lastschrift'} checked={m.recurring} onChange={(e) => set({ recurring: e.currentTarget.checked })} />
           <TextInput label="Kontoinhaber" value={m.account_holder} onChange={(e) => set({ account_holder: e.currentTarget.value })} />
           <TextInput label="IBAN" required value={m.iban} onChange={(e) => set({ iban: e.currentTarget.value })} error={m.iban.trim() && !ibanValid(m.iban) ? 'IBAN ungültig' : undefined} />
-          <TextInput label="BIC" description="optional" value={m.bic} onChange={(e) => set({ bic: e.currentTarget.value })} />
+          <TextInput label="BIC" description="optional" inputWrapperOrder={['label', 'input', 'description', 'error']} value={m.bic} onChange={(e) => set({ bic: e.currentTarget.value })} />
           {m.id > 0 && <DateField label="Widerrufen zum" value={m.revoked_on} onChange={(v) => set({ revoked_on: v })} clearable placeholder="nicht widerrufen" />}
         </SimpleGrid>
         <Textarea label="Notiz" value={m.notes} onChange={(e) => set({ notes: e.currentTarget.value })} autosize minRows={2} />
