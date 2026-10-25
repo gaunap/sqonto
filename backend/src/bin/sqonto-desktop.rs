@@ -88,6 +88,8 @@ fn main() {
 
 fn run(dir: &Path, app_url: String, start_url: String) -> ! {
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+    #[cfg(target_os = "macos")]
+    let _menu = macos_menu();
     let proxy = event_loop.create_proxy();
     let focus_proxy = Mutex::new(proxy.clone());
     sqonto::set_focus_handler(move || {
@@ -230,6 +232,41 @@ fn run(dir: &Path, app_url: String, start_url: String) -> ! {
             _ => {}
         }
     })
+}
+
+/// The WebView only handles Cmd+C/V/X/A/Z when the menu bar has the matching items.
+#[cfg(target_os = "macos")]
+fn macos_menu() -> muda::Menu {
+    use muda::{Menu, PredefinedMenuItem, Submenu};
+    let menu = Menu::new();
+    let app = Submenu::new("Sqonto", true);
+    let edit = Submenu::new("Bearbeiten", true);
+    let window = Submenu::new("Fenster", true);
+    let _ = menu.append_items(&[&app, &edit, &window]);
+    let _ = app.append_items(&[
+        &PredefinedMenuItem::about(None, None),
+        &PredefinedMenuItem::separator(),
+        &PredefinedMenuItem::services(None),
+        &PredefinedMenuItem::separator(),
+        &PredefinedMenuItem::hide(None),
+        &PredefinedMenuItem::hide_others(None),
+        &PredefinedMenuItem::show_all(None),
+        &PredefinedMenuItem::separator(),
+        &PredefinedMenuItem::quit(None),
+    ]);
+    let _ = edit.append_items(&[
+        &PredefinedMenuItem::undo(None),
+        &PredefinedMenuItem::redo(None),
+        &PredefinedMenuItem::separator(),
+        &PredefinedMenuItem::cut(None),
+        &PredefinedMenuItem::copy(None),
+        &PredefinedMenuItem::paste(None),
+        &PredefinedMenuItem::select_all(None),
+    ]);
+    let _ = window.append_items(&[&PredefinedMenuItem::minimize(None), &PredefinedMenuItem::maximize(None), &PredefinedMenuItem::close_window(None)]);
+    window.set_as_windows_menu_for_nsapp();
+    menu.init_for_nsapp();
+    menu
 }
 
 fn main_window(event_loop: &EventLoop<UserEvent>, state_file: &Path) -> Result<Window, tao::error::OsError> {
