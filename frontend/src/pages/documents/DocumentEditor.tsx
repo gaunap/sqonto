@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useBlocker, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
+  ActionIcon,
   Alert,
   Box,
   Button,
@@ -30,7 +31,7 @@ import {
 } from '@mantine/core';
 import { useDebouncedValue, useHotkeys, useMediaQuery } from '@mantine/hooks';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import { IconBraces, IconChevronDown, IconChevronUp, IconDeviceFloppy, IconEye, IconEyeOff, IconLock, IconSend, IconInfoCircle } from '@tabler/icons-react';
+import { IconBraces, IconChevronDown, IconChevronUp, IconDeviceFloppy, IconDots, IconEye, IconEyeOff, IconLock, IconSend, IconInfoCircle, IconTrash } from '@tabler/icons-react';
 import dayjs from 'dayjs';
 import { api } from '@/api/client';
 import { notifyError, useAction, useApi, useLayouts, useSettings } from '@/api/hooks';
@@ -38,7 +39,7 @@ import type { ContactDefaults, Document, DocumentFull, DocumentInput, MandateVie
 import { ContactSelect, DateField } from '@/components/inputs';
 import { emptyLine, LinesEditor, newKey, type EditorLine } from '@/components/LinesEditor';
 import { PagesPreview, TotalsBox } from '@/components/DocumentParts';
-import { Page, PageHeader, StatusBadge } from '@/components/ui';
+import { Page, PageHeader, StatusBadge, confirmAction } from '@/components/ui';
 import { calculate } from '@/lib/calc';
 import { date as fmtDate, formatIban, money, today } from '@/lib/format';
 import { useLeaveWarning } from '@/lib/desktop';
@@ -154,6 +155,13 @@ export function DocumentEditorPage() {
   });
 
   const [finalizeOpen, setFinalizeOpen] = useState(false);
+  const remove = useAction(() => api.del(`/documents/${doc?.id}`), {
+    success: 'Entwurf gelöscht',
+    onSuccess: () => {
+      setDirty(false);
+      setTimeout(() => navigate(meta?.route ?? '/', { replace: true }), 0);
+    },
+  });
   const save = useAction(
     async (opts: { finalize?: boolean; redate?: string }) => {
       if (!payload) throw new Error('Kein Dokument');
@@ -277,6 +285,32 @@ export function DocumentEditorPage() {
               <Button leftSection={isInvoiceLike ? <IconLock size={16} /> : <IconSend size={16} />} loading={save.isPending && !!save.variables?.finalize} onClick={finalize}>
                 Abschließen
               </Button>
+            )}
+            {doc.status === 'draft' && !isNew && doc.id > 0 && (
+              <Menu position="bottom-end">
+                <Menu.Target>
+                  <ActionIcon variant="default" size="lg" aria-label="Mehr">
+                    <IconDots size={16} />
+                  </ActionIcon>
+                </Menu.Target>
+                <Menu.Dropdown>
+                  <Menu.Item
+                    leftSection={<IconTrash size={16} />}
+                    color="red"
+                    onClick={() =>
+                      confirmAction({
+                        title: 'Entwurf löschen',
+                        message: `${label} (Entwurf) wirklich löschen? Nicht gespeicherte Änderungen gehen verloren.`,
+                        confirmLabel: 'Löschen',
+                        danger: true,
+                        onConfirm: () => remove.mutate(),
+                      })
+                    }
+                  >
+                    Entwurf löschen
+                  </Menu.Item>
+                </Menu.Dropdown>
+              </Menu>
             )}
           </>
         }
