@@ -35,6 +35,40 @@ if [ -n "$SQONTO_SERVER_ONLY" ]; then
 else
   cargo build --locked --release --manifest-path backend/Cargo.toml --bins
   cp backend/target/release/sqonto-desktop dist/sqonto
+  if [ "$(uname -s)" = "Darwin" ]; then
+    # Sqonto.app: Dock, Launchpad and Finder take the icon from the bundle. The data lives in
+    # ~/Library/Application Support/Sqonto, because the bundle itself is replaced on updates.
+    app=dist/Sqonto.app
+    rm -rf "$app"
+    mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+    cp backend/target/release/sqonto-desktop "$app/Contents/MacOS/sqonto"
+    cp backend/assets/icons/sqonto.icns "$app/Contents/Resources/sqonto.icns"
+    cat > "$app/Contents/MacOS/Sqonto-launcher" <<'LAUNCHER'
+#!/bin/sh
+dir=$(cd "$(dirname "$0")" && pwd)
+export SQONTO_DATA_DIR="${SQONTO_DATA_DIR:-$HOME/Library/Application Support/Sqonto}"
+exec "$dir/sqonto" "$@"
+LAUNCHER
+    chmod +x "$app/Contents/MacOS/Sqonto-launcher"
+    cat > "$app/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>Sqonto</string>
+  <key>CFBundleDisplayName</key><string>Sqonto</string>
+  <key>CFBundleIdentifier</key><string>de.sqonto.app</string>
+  <key>CFBundleExecutable</key><string>Sqonto-launcher</string>
+  <key>CFBundleIconFile</key><string>sqonto</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>$version</string>
+  <key>CFBundleVersion</key><string>$version</string>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>
+PLIST
+  fi
   files="sqonto sqonto-server LICENSE.txt THIRD-PARTY-LICENSES.txt"
   variant=""
 fi
