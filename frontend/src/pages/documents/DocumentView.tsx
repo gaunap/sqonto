@@ -272,7 +272,7 @@ function SendEmailModal({ opened, onClose, doc }: { opened: boolean; onClose: ()
   return (
     <Modal opened={opened} onClose={onClose} size="lg" title={<Text fw={650}>Per E-Mail senden</Text>}>
       <Stack gap="sm">
-        <TextInput label="An" required value={mail.to} onChange={(e) => set({ to: e.currentTarget.value })} description="Mehrere Adressen mit Komma trennen" inputWrapperOrder={['label', 'input', 'description', 'error']} />
+        <TextInput label="An" required value={mail.to} onChange={(e) => set({ to: e.currentTarget.value })} description="Mehrere Adressen mit Komma trennen" />
         <TextInput label="Kopie (CC)" value={mail.cc} onChange={(e) => set({ cc: e.currentTarget.value })} />
         <TextInput label="Betreff" value={mail.subject} onChange={(e) => set({ subject: e.currentTarget.value })} />
         <Textarea label="Text" autosize minRows={8} value={mail.body} onChange={(e) => set({ body: e.currentTarget.value })} />
