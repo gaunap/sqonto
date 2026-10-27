@@ -23,6 +23,8 @@ use std::sync::Mutex;
 use sqonto::Launch;
 use serde::{Deserialize, Serialize};
 use tao::dpi::{LogicalSize, PhysicalPosition};
+#[cfg(target_os = "macos")]
+use tao::event::StartCause;
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoop, EventLoopBuilder, EventLoopProxy, EventLoopWindowTarget};
 use tao::window::{Icon, ResizeDirection, Window, WindowBuilder, WindowId};
@@ -150,6 +152,9 @@ fn run(dir: &Path, app_url: String, start_url: String) -> ! {
     event_loop.run(move |event, target, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
+            // Once the app has finished launching: macOS may reset the icon set before that.
+            #[cfg(target_os = "macos")]
+            Event::NewEvents(StartCause::Init) => set_dock_icon(),
             Event::WindowEvent { window_id, event: WindowEvent::CloseRequested, .. } => {
                 if window_id != window.id() {
                     popups.remove(&window_id);
