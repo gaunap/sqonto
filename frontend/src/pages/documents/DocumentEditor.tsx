@@ -429,7 +429,6 @@ export function DocumentEditorPage() {
                     data={TAX_MODES}
                     value={doc.tax_mode}
                     disabled={smallBusiness}
-                    inputWrapperOrder={['label', 'input', 'description', 'error']}
                     description={smallBusiness ? 'Kleinunternehmerregelung ist in den Einstellungen aktiv' : undefined}
                     onChange={(v) => patch({ tax_mode: v ?? 'standard' })}
                   />

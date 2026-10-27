@@ -138,7 +138,6 @@ function CompanyTab({ s, patch }: { s: Settings; patch: Patch }) {
                 label="Gläubiger-Identifikationsnummer"
                 placeholder="DE98ZZZ09999999999"
                 description="Bei der Deutschen Bundesbank zu beantragen; nötig, um Rechnungen per Lastschrift einzuziehen"
-                inputWrapperOrder={['label', 'input', 'description', 'error']}
                 value={s.debit.creditor_id}
                 onChange={(e) => {
                   const v = e.currentTarget.value;
@@ -152,7 +151,6 @@ function CompanyTab({ s, patch }: { s: Settings; patch: Patch }) {
                 min={1}
                 max={30}
                 description="14 Tage, sofern mit den Kunden keine kürzere Frist vereinbart ist (steht dann im Mandat)"
-                inputWrapperOrder={['label', 'input', 'description', 'error']}
                 value={s.debit.prenotification_days}
                 onChange={(v) => patch((x) => ({ ...x, debit: { ...x.debit, prenotification_days: Number(v) || 14 } }))}
               />
@@ -322,7 +320,6 @@ function TaxTab({ s, patch }: { s: Settings; patch: Patch }) {
             value={t.chart}
             onChange={(v) => set({ chart: v ?? 'SKR03' })}
             description={status?.chart_locked ? 'Kann nicht mehr geändert werden, sobald Zahlungskonten, Belege oder Buchungen angelegt sind' : undefined}
-            inputWrapperOrder={['label', 'input', 'description', 'error']}
             disabled={status?.chart_locked}
           />
           <NumberInput label="Standard-Umsatzsteuersatz" suffix=" %" value={t.default_tax_rate} onChange={(v) => set({ default_tax_rate: Number(v) || 19 })} />
@@ -820,7 +817,6 @@ function EmailTab({ s, patch }: { s: Settings; patch: Patch }) {
             label="Passwort"
             placeholder={e.has_password ? 'gespeichert' : ''}
             description={e.has_password ? 'Leer lassen, um das gespeicherte Passwort zu behalten' : undefined}
-            inputWrapperOrder={['label', 'input', 'description', 'error']}
             value={e.password}
             onChange={(ev) => set({ password: ev.currentTarget.value })}
           />
@@ -852,7 +848,6 @@ function EmailTab({ s, patch }: { s: Settings; patch: Patch }) {
             value={e.body}
             onChange={(ev) => set({ body: ev.currentTarget.value })}
             description="Platzhalter: {{Dokument}}, {{Nummer}}, {{Datum}}, {{Betrag}}, {{Fällig am}}, {{Anrede}}, {{Kunde}}, {{Ansprechpartner}}, {{Firma}}, {{Leistungszeitraum}}, {{Monat}}"
-            inputWrapperOrder={['label', 'input', 'description', 'error']}
           />
         </Stack>
       </Card>
@@ -933,7 +928,6 @@ function AutoBackupCard({ s, patch }: { s: Settings; patch: Patch }) {
             label="Ordner"
             placeholder={info?.default_folder}
             description="Leer lassen für „backups“ im Datenordner"
-            inputWrapperOrder={['label', 'input', 'description', 'error']}
             value={b.folder}
             onChange={(e) => set({ folder: e.currentTarget.value })}
           />

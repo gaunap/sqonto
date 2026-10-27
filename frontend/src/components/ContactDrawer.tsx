@@ -259,7 +259,7 @@ export function ContactDrawer({
               />
             </Grid.Col>
             <Grid.Col span={{ base: 12, sm: 4 }}>
-              <TextInput label="Leitweg-ID" description="Für Behörden (XRechnung)" inputWrapperOrder={['label', 'input', 'description', 'error']} {...form.getInputProps('leitweg_id')} />
+              <TextInput label="Leitweg-ID" description="Für Behörden (XRechnung)" {...form.getInputProps('leitweg_id')} />
             </Grid.Col>
             <Grid.Col span={{ base: 12, sm: 6 }}>
               <Select label="Rechnungsformat" data={EINVOICE_FORMATS} {...form.getInputProps('einvoice_format')} />
@@ -268,7 +268,6 @@ export function ContactDrawer({
               <Select
                 label="Steuerart"
                 description="Leer = automatisch nach Land und USt-IdNr."
-                inputWrapperOrder={['label', 'input', 'description', 'error']}
                 clearable
                 data={TAX_MODES}
                 value={v.default_tax_mode || null}

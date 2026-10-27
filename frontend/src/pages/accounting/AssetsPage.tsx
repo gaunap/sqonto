@@ -45,7 +45,7 @@ function AssetDrawer({ opened, onClose, view }: { opened: boolean; onClose: () =
           <DateField label="Anschaffungsdatum" value={a.acquisition_date} onChange={(v) => v && setA({ ...a, acquisition_date: v })} />
           <MoneyInput label="Anschaffungskosten (netto)" value={a.cost} onChange={(v) => setA({ ...a, cost: v })} />
           <Select label="Abschreibungsmethode" data={ASSET_METHODS} value={a.method} onChange={(v) => setA({ ...a, method: v ?? 'linear' })} />
-          {a.method === 'linear' && <NumberInput label="Nutzungsdauer (Jahre)" min={1} max={50} value={a.useful_life_years} onChange={(v) => setA({ ...a, useful_life_years: Number(v) || 1 })} description="Laut AfA-Tabelle, z. B. Computer 1–3, Büromöbel 13, Pkw 6" inputWrapperOrder={['label', 'input', 'description', 'error']} />}
+          {a.method === 'linear' && <NumberInput label="Nutzungsdauer (Jahre)" min={1} max={50} value={a.useful_life_years} onChange={(v) => setA({ ...a, useful_life_years: Number(v) || 1 })} description="Laut AfA-Tabelle, z. B. Computer 1–3, Büromöbel 13, Pkw 6" />}
           <DateField label="Abgang / Verkauf am" value={a.disposal_date} onChange={(v) => setA({ ...a, disposal_date: v })} clearable />
         </SimpleGrid>
         <Textarea label="Notizen" value={a.notes} onChange={(e) => setA({ ...a, notes: e.currentTarget.value })} />
