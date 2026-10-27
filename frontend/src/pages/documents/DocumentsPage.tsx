@@ -337,7 +337,7 @@ export function DocumentsPage({ docType }: { docType: DocType }) {
                                 onClick={() =>
                                   confirmAction({
                                     title: 'Dokument löschen',
-                                    message: `${docLabel(d.doc_type, d.kind)} ${d.number || d.title} wirklich löschen?`,
+                                    message: d.number ? `${docLabel(d.doc_type, d.kind)} ${d.number} wirklich löschen?` : `${docLabel(d.doc_type, d.kind)} (Entwurf)${d.contact_name ? ` für ${d.contact_name}` : ''} vom ${date(d.date)} wirklich löschen?`,
                                     confirmLabel: 'Löschen',
                                     danger: true,
                                     onConfirm: () => remove.mutate(d.id),
