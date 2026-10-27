@@ -165,17 +165,7 @@ fn run(dir: &Path, app_url: String, start_url: String) -> ! {
                 "drag" => {
                     let _ = window.drag_window();
                 }
-                "close" => {
-                    let p = proxy.clone();
-                    if webview.evaluate_script_with_callback(UNSAVED_JS, move |r| {
-                        let _ = p.send_event(UserEvent::CloseCheck(r));
-                    })
-                    .is_err()
-                    {
-                        save_state(&window, &state_file);
-                        *control_flow = ControlFlow::Exit;
-                    }
-                }
+                "close" => request_close(&window, &webview, &proxy, &state_file, control_flow),
                 "state" => send_window_state(&window, &webview),
                 other => {
                     if let Some(edge) = other.strip_prefix("resize-").and_then(resize_direction)
