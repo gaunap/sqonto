@@ -72,6 +72,10 @@ wry = { version = "0.57", optional = true }
 tao = { version = "0.37", optional = true }
 rfd = { version = "0.17", optional = true }
 
+# Application menu (macOS): without an Edit menu, Cmd+C/V/X/A/Z do nothing in the WebView.
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = "0.17"
+
 [dev-dependencies]
 tower = { version = "0.5.3", features = ["util"] }
 
