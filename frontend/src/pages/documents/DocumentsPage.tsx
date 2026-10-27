@@ -8,6 +8,7 @@ import { ActionIcon, Badge, Button, Card, Group, Menu, SegmentedControl, Stack, 
 import { DatePickerInput } from '@mantine/dates';
 import {
   IconCalendar,
+  IconCopy,
   IconDots,
   IconDownload,
   IconExternalLink,
@@ -16,16 +17,17 @@ import {
   IconRepeat,
   IconPlus,
   IconSearch,
+  IconTrash,
   IconFileInvoice,
   IconBellRinging,
 } from '@tabler/icons-react';
 import dayjs from 'dayjs';
-import { downloadFile, openFile } from '@/api/client';
-import { notifyError, useApi } from '@/api/hooks';
-import type { DocumentListItem } from '@/api/types';
+import { api, downloadFile, openFile } from '@/api/client';
+import { notifyError, useAction, useApi } from '@/api/hooks';
+import type { DocumentListItem, IdResponse } from '@/api/types';
 import { ListTable } from '@/components/ListTable';
 import { RecurringDrawer } from '@/components/Recurring';
-import { Empty, Page, PageHeader, StatPill, StatusBadge } from '@/components/ui';
+import { Empty, Page, PageHeader, StatPill, StatusBadge, confirmAction } from '@/components/ui';
 import { exportCsv } from '@/lib/csv';
 import { date, money, relativeDays } from '@/lib/format';
 import { DOC_TYPES, docLabel, statusInfo, type DocType } from '@/lib/labels';
@@ -69,6 +71,8 @@ const STATUS_TABS: Record<DocType, { value: string; label: string }[]> = {
 export function DocumentsPage({ docType }: { docType: DocType }) {
   const meta = DOC_TYPES[docType];
   const navigate = useNavigate();
+  const remove = useAction((id: number) => api.del(`/documents/${id}`), { success: 'Dokument gelöscht' });
+  const duplicate = useAction((id: number) => api.post<IdResponse>(`/documents/${id}/copy`), { success: 'Kopie erstellt', onSuccess: (r) => navigate(`/dokumente/${r.id}/bearbeiten`) });
   const [params, setParams] = useSearchParams();
   const status = params.get('status') ?? 'all';
   const [q, setQ] = useState('');
@@ -321,6 +325,29 @@ export function DocumentsPage({ docType }: { docType: DocType }) {
                             PDF öffnen
                           </Menu.Item>
                           <Menu.Item onClick={() => navigate(`/dokumente/${d.id}`)}>Details anzeigen</Menu.Item>
+                          <Menu.Item leftSection={<IconCopy size={14} />} onClick={() => duplicate.mutate(d.id)}>
+                            Duplizieren
+                          </Menu.Item>
+                          {!isInvoiceLike && (
+                            <>
+                              <Menu.Divider />
+                              <Menu.Item
+                                leftSection={<IconTrash size={14} />}
+                                color="red"
+                                onClick={() =>
+                                  confirmAction({
+                                    title: 'Dokument löschen',
+                                    message: d.number ? `${docLabel(d.doc_type, d.kind)} ${d.number} wirklich löschen?` : `${docLabel(d.doc_type, d.kind)} (Entwurf)${d.contact_name ? ` für ${d.contact_name}` : ''} vom ${date(d.date)} wirklich löschen?`,
+                                    confirmLabel: 'Löschen',
+                                    danger: true,
+                                    onConfirm: () => remove.mutate(d.id),
+                                  })
+                                }
+                              >
+                                Löschen
+                              </Menu.Item>
+                            </>
+                          )}
                           {d.contact_id && <Menu.Item onClick={() => navigate(`/kontakte/${d.contact_id}`)}>Kontakt öffnen</Menu.Item>}
                         </Menu.Dropdown>
                       </Menu>
