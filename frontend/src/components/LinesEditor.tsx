@@ -209,13 +209,14 @@ interface RowProps {
   onRemove: () => void;
   onDuplicate: () => void;
   onInsertText: () => void;
+  /** Opens the article dialog, prefilled, to create an article for this line. */
+  onCreateArticle: (draft: Partial<Article>) => void;
   readOnly?: boolean;
 }
 
-function LineRow({ line, pos, amount, doc, showDiscount, articles, onChange, onRemove, onDuplicate, onInsertText, readOnly }: RowProps) {
+function LineRow({ line, pos, amount, doc, showDiscount, articles, onChange, onRemove, onDuplicate, onInsertText, onCreateArticle, readOnly }: RowProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: line._key, disabled: readOnly });
   const [showDesc, setShowDesc] = useState(line.description.length > 0);
-  const [articleDraft, setArticleDraft] = useState<Partial<Article> | null>(null);
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -225,12 +226,15 @@ function LineRow({ line, pos, amount, doc, showDiscount, articles, onChange, onR
     zIndex: isDragging ? 2 : undefined,
   };
   const taxEditable = doc.tax_mode === 'standard';
-  // What was already entered on the line carries over into the new article.
+  // What was already entered on the line carries over into the new article, so that saving it does
+  // not change the line. The tax rate only counts in standard mode: elsewhere every line has 0 %.
   const draftFromLine = (name: string): Partial<Article> => ({
     name,
     description: line.description,
     revenue_account: line.account,
-    ...(line.unit_price > 0 ? { price: line.unit_price, unit: line.unit, tax_rate: line.tax_rate } : {}),
+    unit: line.unit || undefined,
+    ...(taxEditable ? { tax_rate: line.tax_rate } : {}),
+    ...(line.unit_price > 0 ? { price: line.unit_price } : {}),
   });
   const applyArticle = (a: Article) => {
     onChange(lineFromArticle(a));
@@ -255,7 +259,7 @@ function LineRow({ line, pos, amount, doc, showDiscount, articles, onChange, onR
           </Menu.Item>
         )}
         {line.line_type === 'item' && !line.article_id && line.name.trim() && (
-          <Menu.Item leftSection={<IconPackage size={16} />} onClick={() => setArticleDraft(draftFromLine(line.name.trim()))}>
+          <Menu.Item leftSection={<IconPackage size={16} />} onClick={() => onCreateArticle(draftFromLine(line.name.trim()))}>
             Als Produkt / Leistung speichern
           </Menu.Item>
         )}
@@ -342,14 +346,7 @@ function LineRow({ line, pos, amount, doc, showDiscount, articles, onChange, onR
             readOnly={readOnly}
             onChange={(v) => onChange({ name: v })}
             onPick={applyArticle}
-            onCreate={(name) => setArticleDraft(draftFromLine(name))}
-          />
-          <ArticleModal
-            opened={articleDraft !== null}
-            onClose={() => setArticleDraft(null)}
-            article={null}
-            initial={articleDraft ?? {}}
-            onSaved={applyArticle}
+            onCreate={(name) => onCreateArticle(draftFromLine(name))}
           />
           {(showDesc || line.description) && (
             <Textarea placeholder="Beschreibung (optional)" size="xs" minRows={1} value={line.description} onChange={(e) => onChange({ description: e.currentTarget.value })} readOnly={readOnly} />
@@ -407,6 +404,8 @@ export function LinesEditor({
   const { data: articleItems } = useArticles();
   const articles = useMemo(() => (articleItems ?? []).map((a) => a.article), [articleItems]);
   const [forceDiscount, setForceDiscount] = useState(false);
+  // One article dialog for all lines: the line it was opened for and what it starts with.
+  const [newArticle, setNewArticle] = useState<{ key: string; draft: Partial<Article> } | null>(null);
   const showDiscount = forceDiscount || lines.some((l) => l.discount_percent);
   const { amounts } = useMemo(() => calculate(doc, lines), [doc, lines]);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
@@ -458,6 +457,7 @@ export function LinesEditor({
                       onRemove={() => onChange(lines.filter((_, j) => j !== i))}
                       onDuplicate={() => insert(i + 1, { ...line, _key: newKey(), id: 0 })}
                       onInsertText={() => insert(i + 1, emptyLine({ line_type: 'text', quantity: 0, unit: '', tax_rate: 0 }))}
+                      onCreateArticle={(draft) => setNewArticle({ key: line._key, draft })}
                     />
                   );
                 })}
@@ -506,6 +506,18 @@ export function LinesEditor({
             </Button>
           )}
         </Group>
+      )}
+      {!readOnly && (
+        <ArticleModal
+          opened={newArticle !== null}
+          onClose={() => setNewArticle(null)}
+          article={null}
+          initial={newArticle?.draft}
+          onSaved={(a) => {
+            const i = lines.findIndex((l) => l._key === newArticle?.key);
+            if (i >= 0) update(i, lineFromArticle(a));
+          }}
+        />
       )}
     </Stack>
   );
