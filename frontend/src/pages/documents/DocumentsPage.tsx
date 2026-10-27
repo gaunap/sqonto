@@ -23,7 +23,7 @@ import {
 } from '@tabler/icons-react';
 import dayjs from 'dayjs';
 import { api, downloadFile, openFile } from '@/api/client';
-import { notifyError, useAction, useApi } from '@/api/hooks';
+import { notifyError, useAction, useApi, useSettings } from '@/api/hooks';
 import type { DocumentListItem, IdResponse } from '@/api/types';
 import { ListTable } from '@/components/ListTable';
 import { RecurringDrawer } from '@/components/Recurring';
@@ -85,6 +85,9 @@ export function DocumentsPage({ docType }: { docType: DocType }) {
     to: range[1] ?? undefined,
   }, { keepPrevious: true });
   const { data: counts } = useApi<Record<string, number>>('/documents/counts', { doc_type: docType });
+  const { data: settings } = useSettings();
+  // the title a new quote gets: the one set in Einstellungen → Dokumente, else the type label
+  const defaultTitle = settings?.docs.texts.quote?.title;
   const isInvoiceLike = docType === 'invoice' || docType === 'credit_note';
 
   const filtered = useMemo(() => {
@@ -230,7 +233,7 @@ export function DocumentsPage({ docType }: { docType: DocType }) {
                   ),
                 },
                 { accessor: 'contact_name', title: 'Kunde', sortable: true, ellipsis: true },
-                ...(docType === 'quote' ? [{ accessor: 'title', title: 'Titel', sortable: true, ellipsis: true, visibleMediaQuery: '(min-width: 48em)', render: (d: DocumentListItem) => (d.title === docLabel(d.doc_type, d.kind) ? '' : d.title) }] : []),
+                ...(docType === 'quote' ? [{ accessor: 'title', title: 'Titel', sortable: true, ellipsis: true, visibleMediaQuery: '(min-width: 48em)', render: (d: DocumentListItem) => (d.title === docLabel(d.doc_type, d.kind) || d.title === defaultTitle ? '' : d.title) }] : []),
                 { accessor: 'date', title: 'Datum', sortable: true, render: (d) => date(d.date), width: 110 },
                 ...(isInvoiceLike
                   ? [
