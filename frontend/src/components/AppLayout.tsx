@@ -268,8 +268,8 @@ export function AppLayout() {
   }, [location.pathname]);
 
   useHotkeys([
-    ['alt+N', () => navigate('/dokumente/neu?type=invoice')],
-    ['alt+B', () => navigate('/belege/neu')],
+    ['alt+N', () => navigate('/dokumente/neu?type=invoice'), { usePhysicalKeys: true }],
+    ['alt+B', () => navigate('/belege/neu'), { usePhysicalKeys: true }],
   ]);
 
   if (isLoading || !status) {
