@@ -26,6 +26,14 @@ declare global {
   }
 }
 
+export const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || navigator.userAgent);
+
+/** Label of a shortcut as the platform names its keys: ⌘K / ⌥N on macOS, Strg + K / Alt+N elsewhere. */
+export const shortcutLabel = (key: string, modifier: 'mod' | 'alt') => {
+  if (isMac) return `${modifier === 'mod' ? '⌘' : '⌥'}${key}`;
+  return modifier === 'mod' ? `Strg + ${key}` : `Alt+${key}`;
+};
+
 export const isDesktop = typeof window !== 'undefined' && !!window.__SQONTO_DESKTOP__;
 
 // ---------------------------------------------------------------- Title bar (Windows)

@@ -61,7 +61,7 @@ import {
 import { useApi, useStatus } from '@/api/hooks';
 import { SqontoLogo } from '@/components/ui';
 import { useUpdateNotice } from '@/components/UpdateNotice';
-import { WindowControls, hasTitlebar, titlebarMouseDown, useTitlebarHost } from '@/lib/desktop';
+import { WindowControls, hasTitlebar, shortcutLabel, titlebarMouseDown, useTitlebarHost } from '@/lib/desktop';
 import type { Dashboard, SearchHit } from '@/api/types';
 
 interface NavItem {
@@ -324,7 +324,7 @@ export function AppLayout() {
                 Suchen nach Kunden, Rechnungen, Belegen …
               </Text>
               <Kbd size="xs" visibleFrom="md" style={{ flexShrink: 0 }}>
-                Strg + K
+                {shortcutLabel('K', 'mod')}
               </Kbd>
             </Group>
           </UnstyledButton>
@@ -341,7 +341,7 @@ export function AppLayout() {
               </Menu.Target>
               <Menu.Dropdown>
                 <Menu.Label>Verkauf</Menu.Label>
-                <Menu.Item leftSection={<IconFileInvoice size={16} />} onClick={() => navigate('/dokumente/neu?type=invoice')} rightSection={<Text size="xs" c="dimmed">Alt+N</Text>}>
+                <Menu.Item leftSection={<IconFileInvoice size={16} />} onClick={() => navigate('/dokumente/neu?type=invoice')} rightSection={<Text size="xs" c="dimmed">{shortcutLabel('N', 'alt')}</Text>}>
                   Rechnung
                 </Menu.Item>
                 <Menu.Item leftSection={<IconFileText size={16} />} onClick={() => navigate('/dokumente/neu?type=quote')}>
@@ -358,7 +358,7 @@ export function AppLayout() {
                 </Menu.Item>
                 <Menu.Divider />
                 <Menu.Label>Einkauf & Zahlungen</Menu.Label>
-                <Menu.Item leftSection={<IconReceipt2 size={16} />} onClick={() => navigate('/belege/neu')} rightSection={<Text size="xs" c="dimmed">Alt+B</Text>}>
+                <Menu.Item leftSection={<IconReceipt2 size={16} />} onClick={() => navigate('/belege/neu')} rightSection={<Text size="xs" c="dimmed">{shortcutLabel('B', 'alt')}</Text>}>
                   Beleg erfassen
                 </Menu.Item>
                 <Menu.Item leftSection={<IconCash size={16} />} onClick={() => navigate('/kasse?neu=1')}>
