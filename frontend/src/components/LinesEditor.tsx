@@ -232,7 +232,7 @@ function LineRow({ line, pos, amount, doc, showDiscount, articles, onChange, onR
     name,
     description: line.description,
     revenue_account: line.account,
-    unit: line.unit || undefined,
+    ...(line.unit ? { unit: line.unit } : {}),
     ...(taxEditable ? { tax_rate: line.tax_rate } : {}),
     ...(line.unit_price > 0 ? { price: line.unit_price } : {}),
   });
